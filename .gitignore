@@ -1,0 +1,14 @@
+node_modules
+dist
+dist_electron
+.idea
+.vscode
+*.log
+.DS_Store
+Thumbs.db
+vitube.db
+vitube.db-journal
+.env
+
+# Ignore heavy binaries
+assets/*.exe
