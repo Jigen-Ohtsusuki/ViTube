@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    checkAuth: () => ipcRenderer.invoke('auth:check'), // NEW
     login: () => ipcRenderer.invoke('auth:login'),
     getSubscriptions: () => ipcRenderer.invoke('youtube:getSubscriptions'),
     getMyPlaylists: () => ipcRenderer.invoke('youtube:getMyPlaylists'),

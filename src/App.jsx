@@ -4,14 +4,23 @@ import { categoryMap } from './categoryMap';
 import { useAppStore } from './store';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
+import Hls from 'hls.js';
 
 function App() {
     const [version, setVersion] = useState('');
     const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
     useEffect(() => {
         if (window.api) {
             window.api.getVersion().then(setVersion);
+
+            window.api.checkAuth().then(isAuth => {
+                setIsLoggedIn(isAuth);
+                setIsCheckingAuth(false);
+            });
+        } else {
+            setIsCheckingAuth(false);
         }
     }, []);
 
@@ -25,6 +34,10 @@ function App() {
             console.error(error);
         }
     };
+
+    if (isCheckingAuth) {
+        return <div className="h-screen w-screen bg-[#0f0f0f] flex items-center justify-center text-white">Loading...</div>;
+    }
 
     if (!isLoggedIn) {
         return <LoginScreen onLogin={handleLogin} />;
@@ -69,6 +82,7 @@ function GlobalPlayer() {
 
     const [playableUrl, setPlayableUrl] = useState(null);
     const [audioUrl, setAudioUrl] = useState(null);
+    const [isLive, setIsLive] = useState(false);
     const [relatedVideos, setRelatedVideos] = useState([]);
     const [playbackRate, setPlaybackRate] = useState(1);
     const [showDownloadModal, setShowDownloadModal] = useState(false);
@@ -92,6 +106,7 @@ function GlobalPlayer() {
 
     const mediaRef = useRef(null);
     const audioRef = useRef(null);
+    const hlsRef = useRef(null);
     const controlsTimeoutRef = useRef(null);
     const historyAdded = useRef(false);
 
@@ -99,13 +114,15 @@ function GlobalPlayer() {
     const hasVideo = !!currentVideoId;
 
     useEffect(() => {
+        if (isLive) return;
+
         const video = mediaRef.current;
         const audio = audioRef.current;
 
         const sync = () => {
             if (!video || !audio) return;
 
-            if (Math.abs(video.currentTime - audio.currentTime) > 0.2) {
+            if (Math.abs(video.currentTime - audio.currentTime) > 0.25) {
                 audio.currentTime = video.currentTime;
             }
 
@@ -121,9 +138,9 @@ function GlobalPlayer() {
             if (audio.volume !== volume) audio.volume = volume;
         };
 
-        const interval = setInterval(sync, 250);
+        const interval = setInterval(sync, 200);
         return () => clearInterval(interval);
-    }, [playableUrl, audioUrl, volume]);
+    }, [playableUrl, audioUrl, volume, isLive]);
 
     useGSAP(() => {
         if (hasVideo && !isWatchPage) {
@@ -135,7 +152,7 @@ function GlobalPlayer() {
     }, [hasVideo, isWatchPage]);
 
     const formatTime = (seconds) => {
-        if (!seconds) return "0:00";
+        if (!seconds || isNaN(seconds)) return "0:00";
         const mins = Math.floor(seconds / 60);
         const secs = Math.floor(seconds % 60);
         return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
@@ -151,6 +168,14 @@ function GlobalPlayer() {
             setSponsorSegments([]);
             setPlayableUrl(null);
             setAudioUrl(null);
+            setIsLive(false);
+            setCurrentVideoLabel('Auto');
+            setCurrentAudioLabel('Auto');
+
+            if (hlsRef.current) {
+                hlsRef.current.destroy();
+                hlsRef.current = null;
+            }
 
             if (sponsorBlockEnabled) {
                 window.api.getSponsorSegments(currentVideoId).then(res => {
@@ -163,60 +188,96 @@ function GlobalPlayer() {
                     const data = result.data;
                     setVideoInfo(data);
 
-                    const rawFormats = data.formats || [];
+                    const isLiveStream = data.is_live === true ||
+                        data.live_status === 'is_live' ||
+                        (data.formats && data.formats.some(f => f.protocol === 'm3u8' || f.protocol === 'm3u8_native' || f.ext === 'm3u8'));
 
-                    const vOpts = rawFormats
-                        .filter(f => f.vcodec !== 'none' && (f.ext === 'mp4' || f.ext === 'webm'))
-                        .sort((a, b) => (b.height || 0) - (a.height || 0));
+                    if (isLiveStream) {
+                        setIsLive(true);
 
-                    const uniqueV = [];
-                    const seenV = new Set();
-                    vOpts.forEach(f => {
-                        if (!f.height) return;
-                        const isHDR = f.dynamic_range === 'HDR10' || f.dynamic_range === 'HLG';
-                        const hdrLabel = isHDR ? ' HDR' : '';
-                        const codecLabel = f.vcodec && f.vcodec.startsWith('av01') ? ' (AV1)' : (f.vcodec && f.vcodec.startsWith('vp9') ? ' (VP9)' : '');
-                        const label = `${f.height}p${hdrLabel}${codecLabel}`;
-                        const key = label + f.url;
-                        if(!seenV.has(key)) {
-                            seenV.add(key);
-                            uniqueV.push({ label, ...f });
+                        let masterUrl = data.manifest_url || data.hls_manifest_url;
+
+                        if (!masterUrl && data.formats) {
+                            const masterFormat = data.formats.find(f => f.url && f.url.includes('master.m3u8'));
+                            if (masterFormat) masterUrl = masterFormat.url;
                         }
-                    });
-                    setVideoQualities(uniqueV);
 
-                    const aOpts = rawFormats
-                        .filter(f => f.acodec !== 'none' && f.vcodec === 'none')
-                        .sort((a, b) => (b.abr || 0) - (a.abr || 0));
-
-                    const uniqueA = [];
-                    aOpts.forEach(f => {
-                        if(!f.abr) return;
-                        const label = `${f.abr.toFixed(0)}kbps (${f.ext})`;
-                        uniqueA.push({ label, ...f });
-                    });
-                    setAudioQualities(uniqueA);
-
-                    if (isAudioMode) {
-                        const bestAudio = uniqueA[0];
-                        if(bestAudio) {
-                            setAudioUrl(bestAudio.url);
-                            setCurrentAudioLabel(bestAudio.label);
+                        if (!masterUrl && data.url && (data.url.includes('.m3u8') || data.protocol === 'm3u8')) {
+                            masterUrl = data.url;
                         }
+
+                        if (!masterUrl && data.formats) {
+                            const hlsFormats = data.formats.filter(f => f.protocol === 'm3u8' || f.ext === 'm3u8');
+                            if (hlsFormats.length > 0) {
+                                hlsFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
+                                masterUrl = hlsFormats[0].url;
+                            }
+                        }
+
+                        setPlayableUrl(masterUrl);
+                        setCurrentVideoLabel('Auto');
+                        setCurrentAudioLabel('Default');
                     } else {
-                        const bestVideo = uniqueV[0];
-                        const bestAudio = uniqueA[0];
+                        const rawFormats = data.formats || [];
 
-                        if (bestVideo) {
-                            setPlayableUrl(bestVideo.url);
-                            setCurrentVideoLabel(bestVideo.label);
+                        const vOpts = rawFormats
+                            .filter(f => f.vcodec !== 'none')
+                            .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+                        const uniqueV = [];
+                        const seenV = new Set();
+
+                        vOpts.forEach(f => {
+                            if (!f.height) return;
+                            const isHDR = f.dynamic_range === 'HDR10' || f.dynamic_range === 'HLG';
+                            const hdrLabel = isHDR ? ' HDR' : '';
+                            const codecLabel = f.vcodec.includes('av01') ? ' (AV1)' : f.vcodec.includes('vp9') ? ' (VP9)' : '';
+                            const label = `${f.height}p${hdrLabel}${codecLabel}`;
+                            const key = label + f.url;
+
+                            if(!seenV.has(key)) {
+                                seenV.add(key);
+                                uniqueV.push({ label, url: f.url, ...f });
+                            }
+                        });
+                        setVideoQualities(uniqueV);
+
+                        const aOpts = rawFormats
+                            .filter(f => f.acodec !== 'none' && f.vcodec === 'none')
+                            .sort((a, b) => (b.abr || 0) - (a.abr || 0));
+
+                        const uniqueA = [];
+                        aOpts.forEach(f => {
+                            if(!f.abr) return;
+                            const label = `${f.abr.toFixed(0)}kbps (${f.ext})`;
+                            uniqueA.push({ label, url: f.url, ...f });
+                        });
+                        setAudioQualities(uniqueA);
+
+                        if (isAudioMode) {
+                            const bestAudio = uniqueA[0];
+                            if(bestAudio) {
+                                setAudioUrl(bestAudio.url);
+                                setCurrentAudioLabel(bestAudio.label);
+                            }
                         } else {
-                            setPlayableUrl(data.url);
-                        }
+                            const bestVideo = uniqueV[0];
+                            const bestAudio = uniqueA[0];
 
-                        if (bestAudio) {
-                            setAudioUrl(bestAudio.url);
-                            setCurrentAudioLabel(bestAudio.label);
+                            if (bestVideo) {
+                                setPlayableUrl(bestVideo.url);
+                                setCurrentVideoLabel(bestVideo.label);
+
+                                if (bestVideo.acodec !== 'none') {
+                                    setAudioUrl(null);
+                                    setCurrentAudioLabel('Embedded');
+                                } else {
+                                    setAudioUrl(bestAudio ? bestAudio.url : null);
+                                    if(bestAudio) setCurrentAudioLabel(bestAudio.label);
+                                }
+                            } else {
+                                setPlayableUrl(data.url);
+                            }
                         }
                     }
 
@@ -246,11 +307,88 @@ function GlobalPlayer() {
 
     useEffect(() => {
         const el = mediaRef.current;
+        if (!el || !playableUrl) return;
+
+        if (isLive && Hls.isSupported()) {
+            if (hlsRef.current) {
+                hlsRef.current.destroy();
+            }
+
+            const hls = new Hls({
+                startPosition: -1,
+                liveSyncDurationCount: 3,
+                xhrSetup: function(xhr) {
+                    xhr.withCredentials = false;
+                }
+            });
+
+            hls.loadSource(playableUrl);
+            hls.attachMedia(el);
+            hlsRef.current = hls;
+
+            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                const hlsLevels = data.levels
+                    .filter(l => l.height && l.height > 0)
+                    .map((l, index) => ({
+                        label: `${l.height}p`,
+                        index: index,
+                        height: l.height
+                    })).reverse();
+
+                hlsLevels.unshift({ label: 'Auto', index: -1, height: 0 });
+                setVideoQualities(hlsLevels);
+                setCurrentVideoLabel('Auto');
+
+                if (hls.audioTracks && hls.audioTracks.length > 0) {
+                    const hlsAudio = hls.audioTracks.map((track, index) => ({
+                        label: track.name || track.lang || `Track ${index + 1}`,
+                        index: index,
+                        id: track.id
+                    }));
+                    setAudioQualities(hlsAudio);
+                    if (hlsAudio.length > 1) setCurrentAudioLabel(hlsAudio[0].label);
+                }
+
+                el.play().catch(() => {});
+            });
+
+            hls.on(Hls.Events.ERROR, function (event, data) {
+                if (data.fatal) {
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            console.log("fatal network error encountered, try to recover");
+                            hls.startLoad();
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            console.log("fatal media error encountered, try to recover");
+                            hls.recoverMediaError();
+                            break;
+                        default:
+                            hls.destroy();
+                            break;
+                    }
+                }
+            });
+
+            return;
+        }
+
+        if (el.src !== playableUrl) {
+            const prevTime = el.currentTime;
+            el.src = playableUrl;
+            if (!isLive && prevTime > 0) el.currentTime = prevTime;
+            el.playbackRate = playbackRate;
+            el.play().catch(() => {});
+        }
+    }, [playableUrl, isLive]);
+
+    useEffect(() => {
+        const el = mediaRef.current;
         if (!el) return;
 
         const updateTime = () => {
             setCurrentTime(el.currentTime);
-            if (sponsorBlockEnabled && sponsorSegments.length > 0) {
+            if (!isLive && sponsorBlockEnabled && sponsorSegments.length > 0) {
                 for (const segment of sponsorSegments) {
                     if (el.currentTime >= segment.segment[0] && el.currentTime < segment.segment[1]) {
                         el.currentTime = segment.segment[1];
@@ -286,11 +424,11 @@ function GlobalPlayer() {
             el.removeEventListener('leavepictureinpicture', onLeavePiP);
             clearPipElement();
         };
-    }, [playableUrl, sponsorBlockEnabled, sponsorSegments]);
+    }, [playableUrl, sponsorBlockEnabled, sponsorSegments, isLive]);
 
     useEffect(() => {
         const el = mediaRef.current;
-        if (playableUrl && el && el.src !== playableUrl) {
+        if (playableUrl && el && el.src !== playableUrl && !isLive) {
             const prevTime = el.currentTime;
             el.src = playableUrl;
             el.currentTime = prevTime;
@@ -313,6 +451,7 @@ function GlobalPlayer() {
     };
 
     const handleSeek = (e) => {
+        if (isLive) return;
         const seekTime = parseFloat(e.target.value);
         if (mediaRef.current) mediaRef.current.currentTime = seekTime;
         if (audioRef.current) audioRef.current.currentTime = seekTime;
@@ -322,8 +461,12 @@ function GlobalPlayer() {
     const handleVolume = (e) => {
         const val = parseFloat(e.target.value);
         setVolume(val);
-        if (audioRef.current) audioRef.current.volume = val;
-        else if (mediaRef.current) mediaRef.current.volume = val;
+        if (isLive) {
+            if (mediaRef.current) mediaRef.current.volume = val;
+        } else {
+            if (audioRef.current) audioRef.current.volume = val;
+            else if (mediaRef.current) mediaRef.current.volume = val;
+        }
     };
 
     const toggleFullscreen = (e) => {
@@ -340,13 +483,38 @@ function GlobalPlayer() {
 
     const handleQualityChange = (q) => {
         setCurrentVideoLabel(q.label);
-        setPlayableUrl(q.url);
+        if (isLive && hlsRef.current) {
+            hlsRef.current.currentLevel = q.index;
+        } else {
+            const time = mediaRef.current ? mediaRef.current.currentTime : 0;
+            setPlayableUrl(q.url);
+
+            if (q.acodec && q.acodec !== 'none') {
+                setAudioUrl(null);
+                setCurrentAudioLabel('Embedded');
+            } else {
+                if (!audioUrl && audioQualities.length > 0) {
+                    setAudioUrl(audioQualities[0].url);
+                    setCurrentAudioLabel(audioQualities[0].label);
+                }
+            }
+
+            setTimeout(() => {
+                if(mediaRef.current) {
+                    mediaRef.current.currentTime = time;
+                }
+            }, 50);
+        }
         setShowQualityMenu(false);
     };
 
     const handleAudioQualityChange = (q) => {
         setCurrentAudioLabel(q.label);
-        setAudioUrl(q.url);
+        if (isLive && hlsRef.current) {
+            hlsRef.current.audioTrack = q.index;
+        } else {
+            setAudioUrl(q.url);
+        }
         setShowAudioMenu(false);
     };
 
@@ -359,7 +527,7 @@ function GlobalPlayer() {
     };
 
     const handleVideoEnd = () => {
-        if (autoplay && relatedVideos.length > 0) {
+        if (!isLive && autoplay && relatedVideos.length > 0) {
             playVideo(relatedVideos[0].id, isAudioMode);
             if (isWatchPage) navigate(`/watch?v=${relatedVideos[0].id}`);
         }
@@ -432,6 +600,7 @@ function GlobalPlayer() {
                         </div>
 
                         <video
+                            key={currentVideoId}
                             ref={mediaRef}
                             className={`w-full h-full object-contain relative z-10 ${isAudioMode ? 'opacity-0' : 'opacity-100'}`}
                             autoPlay
@@ -439,7 +608,7 @@ function GlobalPlayer() {
                             onEnded={handleVideoEnd}
                         />
 
-                        {audioUrl && <audio ref={audioRef} src={audioUrl} autoPlay />}
+                        {!isLive && audioUrl && <audio ref={audioRef} src={audioUrl} autoPlay />}
 
                         {isWatchPage && (
                             <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-4 pb-4 pt-12 transition-opacity duration-300 z-20 ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'}`}>
@@ -448,10 +617,10 @@ function GlobalPlayer() {
                                     {sponsorSegments.map(seg => {
                                         const start = (seg.segment[0] / duration) * 100;
                                         const width = ((seg.segment[1] - seg.segment[0]) / duration) * 100;
-                                        return <div key={seg.UUID} className="absolute top-0 h-full bg-purple-500 z-10 pointer-events-none opacity-80" style={{ left: `${start}%`, width: `${width}%` }} />
+                                        return <div key={seg.UUID} id={`sb-segment-${seg.UUID}`} className="absolute top-0 h-full bg-purple-500 z-10 pointer-events-none opacity-80" style={{ left: `${start}%`, width: `${width}%` }} />
                                     })}
                                     <div className="absolute top-0 left-0 h-full bg-red-600 rounded-full z-20 pointer-events-none" style={{ width: `${(currentTime / duration) * 100}%` }} />
-                                    <input type="range" min="0" max={duration || 0} value={currentTime} onChange={handleSeek} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30" />
+                                    <input type="range" min="0" max={duration || 0} value={currentTime} onChange={handleSeek} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30" disabled={isLive} />
                                 </div>
 
                                 <div className="flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
@@ -460,16 +629,16 @@ function GlobalPlayer() {
                                             {isPlaying ? <svg width="28" height="28" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg> : <svg width="28" height="28" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>}
                                         </button>
 
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 group/vol">
                                             <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-                                            <input type="range" min="0" max="1" step="0.05" value={volume} onChange={handleVolume} className="w-24 h-1 bg-white rounded-lg appearance-none cursor-pointer" />
+                                            <input type="range" min="0" max="1" step="0.05" value={volume} onChange={handleVolume} className="w-24 h-1 bg-white rounded-lg appearance-none cursor-pointer accent-white" />
                                         </div>
 
-                                        <span className="text-xs font-medium text-gray-300 font-mono">{formatTime(currentTime)} / {formatTime(duration)}</span>
+                                        <span className="text-xs font-medium text-gray-300 font-mono">{formatTime(currentTime)} / {isLive ? 'LIVE' : formatTime(duration)}</span>
                                     </div>
 
                                     <div className="flex items-center gap-4">
-                                        {!isAudioMode && videoQualities.length > 0 && (
+                                        {videoQualities.length > 0 && (
                                             <div className="relative">
                                                 <button onClick={() => setShowQualityMenu(!showQualityMenu)} className="text-xs font-bold bg-white/10 px-3 py-1.5 rounded hover:bg-white/20 transition border border-white/10 min-w-[60px]">{currentVideoLabel}</button>
                                                 {showQualityMenu && (
@@ -489,7 +658,7 @@ function GlobalPlayer() {
 
                                         {audioQualities.length > 0 && (
                                             <div className="relative">
-                                                <button onClick={() => setShowAudioMenu(!showAudioMenu)} className="text-xs font-bold bg-white/10 px-3 py-1.5 rounded hover:bg-white/20 transition border border-white/10 min-w-[60px] max-w-[100px] truncate">{currentAudioLabel}</button>
+                                                <button onClick={() => setShowAudioMenu(!showAudioMenu)} className="text-xs font-bold bg-white/10 px-3 py-1.5 rounded hover:bg-white/20 transition border border-white/10 min-w-[60px] max-w-[100px] truncate">♪ {currentAudioLabel}</button>
                                                 {showAudioMenu && (
                                                     <>
                                                         <div className="fixed inset-0 z-40" onClick={() => setShowAudioMenu(false)}></div>
@@ -538,7 +707,7 @@ function GlobalPlayer() {
                                             <option value="0.5">0.5x</option><option value="1">1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option>
                                         </select>
                                     </div>
-                                    <button onClick={() => setShowDownloadModal(true)} className="bg-white text-black px-5 py-2 rounded-full text-sm font-bold hover:bg-[#ddd] transition-colors flex items-center gap-2">Download</button>
+                                    <button onClick={() => setShowDownloadModal(true)} disabled={isLive} className={`bg-white text-black px-5 py-2 rounded-full text-sm font-bold transition-colors flex items-center gap-2 ${isLive ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#ddd]'}`}>Download</button>
                                 </div>
                             </div>
                         </div>
@@ -936,7 +1105,7 @@ function DownloadModal({ videoInfo, videoId, onClose }) {
                         <label className="block text-xs font-bold text-[#666] mb-2 uppercase tracking-wider">Video Stream</label>
                         <div className="h-64 overflow-y-auto bg-[#121212] rounded-xl border border-[#222] p-2 custom-scrollbar">
                             {videoFormats.map(f => {
-                                const isHDR = f.dynamic_range && f.dynamic_range === 'HDR10' || f.dynamic_range === 'HLG';
+                                const isHDR = f.dynamic_range && f.dynamic_range.toLowerCase() !== 'sdr';
                                 return (
                                     <div key={f.format_id} onClick={() => setSelectedVideo(f.format_id)} className={`p-3 mb-1 rounded-lg text-sm cursor-pointer flex justify-between items-center transition-colors ${selectedVideo === f.format_id ? 'bg-blue-600 text-white' : 'hover:bg-[#222] text-[#ccc]'}`}>
                                         <div className="flex items-center gap-2"><span className="font-medium">{f.height}p</span>{isHDR ? <span className="px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-500 text-[10px] font-bold border border-yellow-500/50">HDR</span> : <span className="px-1.5 py-0.5 rounded bg-[#333] text-[#777] text-[10px] font-bold">SDR</span>}</div>

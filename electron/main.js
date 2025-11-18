@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const authManager = require('./authManager');
@@ -8,6 +8,11 @@ const db = require('./database');
 const downloadManager = require('./downloadManager');
 
 const isDev = !app.isPackaged;
+
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let mainWindow;
 
@@ -20,11 +25,31 @@ function createWindow() {
             nodeIntegration: false,
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js'),
-            webSecurity: true,
-            backgroundThrottling: false
+            webSecurity: false,
+            backgroundThrottling: false,
+            webviewTag: true
         },
         show: false
     });
+
+    // INTERCEPTOR: Fixes Live Streams (CORS) and Profile Images (429 Errors)
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+        {
+            urls: [
+                '*://*.googlevideo.com/*',
+                '*://*.youtube.com/*',
+                '*://*.ggpht.com/*',
+                '*://*.googleusercontent.com/*'
+            ]
+        },
+        (details, callback) => {
+            // For images, sometimes no-referrer is better, but usually YouTube referrer works.
+            // If 429 persists, we might need to rotate User-Agents, but this usually fixes it.
+            details.requestHeaders['Referer'] = 'https://www.youtube.com/';
+            details.requestHeaders['Origin'] = 'https://www.youtube.com';
+            callback({ cancel: false, requestHeaders: details.requestHeaders });
+        }
+    );
 
     if (isDev) {
         mainWindow.loadURL('http://localhost:5173');
@@ -41,12 +66,17 @@ function createWindow() {
 app.whenReady().then(() => {
     db.initDatabase();
 
+    // NEW: Check if user is already logged in on app start
+    ipcMain.handle('auth:check', async () => {
+        const tokens = authManager.getTokens();
+        return !!tokens; // Returns true if tokens exist
+    });
+
     ipcMain.handle('auth:login', async () => {
         try {
             const tokens = await authManager.startLogin();
             return { success: true, hasTokens: !!tokens };
         } catch (error) {
-            console.error('Failed to login:', error);
             return { success: false, error: error.message };
         }
     });

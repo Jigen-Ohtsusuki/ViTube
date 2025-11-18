@@ -23,8 +23,11 @@ function getVideoFormats(videoId) {
         const ytDlp = spawn(ytDlpPath, [
             '--dump-json',
             '--no-playlist',
+            // Force extraction of ALL individual streams, not just the master playlist
+            '--youtube-skip-dash-manifest',  // Skip DASH (we want HLS for live)
+            '--no-check-certificates',       // Sometimes needed for live streams
             videoUrl
-        ], { cwd }); // <-- Add this options object
+        ], { cwd });
 
         let output = '';
         let errorOutput = '';
@@ -35,6 +38,8 @@ function getVideoFormats(videoId) {
 
         ytDlp.stderr.on('data', (data) => {
             errorOutput += data.toString();
+            // Log warnings but don't fail
+            console.log('[yt-dlp stderr]:', data.toString());
         });
 
         ytDlp.on('close', (code) => {
