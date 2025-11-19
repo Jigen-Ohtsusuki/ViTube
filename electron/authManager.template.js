@@ -4,17 +4,21 @@ const http = require('http');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config();
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI;
+const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID_HERE';
+const GOOGLE_CLIENT_SECRET = 'YOUR_GOOGLE_CLIENT_SECRET_HERE';
+const REDIRECT_URI = 'http://localhost:8080';
+const HARDCODED_API_KEYS = [
+    'YOUR_API_KEY_1',
+    'YOUR_API_KEY_2',
+    // ...
+];
 
-const apiKeys = (process.env.GOOGLE_API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
-if (apiKeys.length === 0 && process.env.GOOGLE_API_KEY) {
-    apiKeys.push(process.env.GOOGLE_API_KEY);
+if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !REDIRECT_URI) {
+    throw new Error("Missing required OAuth configuration.");
 }
 
+const apiKeys = HARDCODED_API_KEYS.filter(Boolean);
 let currentKeyIndex = 0;
 
 const SCOPES = [
@@ -88,28 +92,35 @@ function startLogin() {
 
         let serverClosed = false;
 
+        const redirectUrl = new URL(REDIRECT_URI);
+        const port = redirectUrl.port || (redirectUrl.protocol === 'https:' ? 443 : 80);
+
         const server = http.createServer(async (req, res) => {
             try {
-                const { code } = url.parse(req.url, true).query;
+                if (req.url.startsWith(redirectUrl.pathname) && !serverClosed) {
+                    const parsedUrl = url.parse(req.url, true);
+                    const { code } = parsedUrl.query;
 
-                if (code && !serverClosed) {
-                    serverClosed = true;
+                    if (code) {
+                        serverClosed = true;
 
-                    res.end('Authentication successful! You can close this window.');
+                        res.writeHead(200, { 'Content-Type': 'text/plain' });
+                        res.end('Authentication successful! You can close this window.');
 
-                    server.close();
-                    if (authWindow && !authWindow.isDestroyed()) {
-                        authWindow.close();
+                        server.close();
+                        if (authWindow && !authWindow.isDestroyed()) {
+                            authWindow.close();
+                        }
+
+                        const { tokens: newTokens } = await oauth2Client.getToken(code);
+                        tokens = newTokens;
+                        oauth2Client.setCredentials(tokens);
+
+                        fs.writeFileSync(tokenPath, JSON.stringify(tokens));
+
+                        resolve(tokens);
                     }
-
-                    const { tokens: newTokens } = await oauth2Client.getToken(code);
-                    tokens = newTokens;
-                    oauth2Client.setCredentials(tokens);
-
-                    fs.writeFileSync(tokenPath, JSON.stringify(tokens));
-
-                    resolve(tokens);
-                } else if (!code) {
+                } else if (!serverClosed) {
                     res.writeHead(404);
                     res.end();
                 }
@@ -124,7 +135,7 @@ function startLogin() {
                 }
                 reject(error);
             }
-        }).listen(8080);
+        }).listen(port);
     });
 }
 

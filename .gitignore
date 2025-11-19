@@ -8,7 +8,7 @@ dist_electron
 Thumbs.db
 vitube.db
 vitube.db-journal
-.env
+electron/authManager.js
 
 # Ignore heavy binaries
 assets/*.exe

@@ -32,7 +32,7 @@ async function enrichWithChannelIcons(items) {
 
         const iconMap = {};
         response.data.items.forEach(channel => {
-            iconMap[channel.id] = channel.snippet.thumbnails.default.url;
+            iconMap[channel.id] = channel.snippet.thumbnails.high.url;
         });
 
         return items.map(item => {
@@ -98,7 +98,6 @@ async function getMyPlaylists() {
     try {
         const client = authManager.getClient();
 
-        // Try OAuth (Mine: true)
         const response = await youtube.playlists.list({
             auth: client,
             part: 'snippet,contentDetails',
@@ -110,12 +109,7 @@ async function getMyPlaylists() {
     } catch (error) {
         console.error("OAuth Playlist fetch failed:", error.message);
 
-        // Backup: If OAuth fails (Quota/Auth), try getting public playlists via Channel ID and API Key
         try {
-            // We need the channel ID of the logged-in user.
-            // Getting 'mine' channel info also requires OAuth, so if that failed, we are stuck.
-            // But we can try to use the 'executeWithRetry' for the playlist call if we knew the channel ID.
-            // For now, we just throw the detailed error so the user knows.
             throw new Error(`Playlist Error: ${error.message}`);
         } catch (backupError) {
             throw new Error(backupError.message);
@@ -189,6 +183,7 @@ async function searchVideos(query) {
                 part: 'snippet',
                 q: query,
                 type: 'video',
+                fields: 'items(id/videoId,snippet(publishedAt,channelId,title,description,channelTitle,thumbnails/high))',
                 maxResults: 20
             });
         });
@@ -208,6 +203,7 @@ async function getChannelContent(channelId, type = 'video') {
                 order: 'date',
                 type: 'video',
                 eventType: type === 'live' ? 'live' : undefined,
+                fields: 'items(id/videoId,snippet(publishedAt,channelId,title,description,channelTitle,thumbnails/high))',
                 maxResults: 25
             });
         });
@@ -224,6 +220,7 @@ async function getChannelPlaylists(channelId) {
                 key: currentKey,
                 part: 'snippet,contentDetails',
                 channelId: channelId,
+                fields: 'items(id,snippet(publishedAt,channelId,title,thumbnails/high,channelTitle),contentDetails/itemCount)',
                 maxResults: 25
             });
         });
@@ -235,18 +232,17 @@ async function getChannelPlaylists(channelId) {
 
 async function getPlaylistItems(playlistId) {
     try {
-        // First, try with API Key Rotation (Faster, saves OAuth quota)
         const response = await executeWithRetry(async (currentKey) => {
             return await youtube.playlistItems.list({
                 key: currentKey,
                 part: 'snippet',
                 playlistId: playlistId,
+                fields: 'items(id,snippet(publishedAt,channelId,title,description,channelTitle,thumbnails/high,resourceId/videoId))',
                 maxResults: 50
             });
         });
         return response.data.items;
     } catch (apiKeyError) {
-        // If API Key fails (maybe private playlist?), try OAuth
         try {
             const client = authManager.getClient();
             const response = await youtube.playlistItems.list({
@@ -267,17 +263,29 @@ async function getChannelIcon(channelId) {
         const response = await executeWithRetry(async (currentKey) => {
             return await youtube.channels.list({
                 key: currentKey,
-                part: 'snippet',
+                part: 'snippet,brandingSettings',
                 id: channelId,
                 maxResults: 1
             });
         });
+
         if (response.data.items.length > 0) {
-            return response.data.items[0].snippet.thumbnails.default.url;
+            const channel = response.data.items[0];
+
+            const iconUrl = channel.snippet.thumbnails.high?.url || channel.snippet.thumbnails.default.url;
+
+            const bannerUrl = channel.brandingSettings?.image?.bannerTvImageUrl ||
+                channel.brandingSettings?.image?.bannerTabletImageUrl ||
+                channel.brandingSettings?.image?.bannerExternalUrl;
+
+            return {
+                icon: iconUrl,
+                banner: bannerUrl || null
+            };
         }
-        return null;
+        return { icon: null, banner: null };
     } catch (error) {
-        return null;
+        return { icon: null, banner: null };
     }
 }
 

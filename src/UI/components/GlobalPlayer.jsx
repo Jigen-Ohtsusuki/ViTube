@@ -1,0 +1,408 @@
+import { useState, useEffect, useRef } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useAppStore } from '../../store';
+import { categoryMap } from '../../categoryMap';
+import gsap from 'gsap';
+import { useGSAP } from '@gsap/react';
+import Hls from 'hls.js';
+import DownloadModal from './DownloadModal';
+
+function GlobalPlayer() {
+    const { currentVideoId, isAudioMode, videoInfo, setVideoInfo, closeVideo, playVideo } = useAppStore();
+    const { autoplay, sponsorBlockEnabled } = useAppStore();
+    const setPipElement = useAppStore((state) => state.setPipElement);
+    const clearPipElement = useAppStore((state) => state.clearPipElement);
+    const navigate = useNavigate();
+    const location = useLocation();
+    const containerRef = useRef(null);
+    const playerContainerRef = useRef(null);
+
+    const [playableUrl, setPlayableUrl] = useState(null);
+    const [audioUrl, setAudioUrl] = useState(null);
+    const [isLive, setIsLive] = useState(false);
+    const [relatedVideos, setRelatedVideos] = useState([]);
+    const [relatedShorts, setRelatedShorts] = useState([]);
+    const [playbackRate, setPlaybackRate] = useState(1);
+    const [showDownloadModal, setShowDownloadModal] = useState(false);
+    const [channelIcon, setChannelIcon] = useState(null);
+
+    const [videoQualities, setVideoQualities] = useState([]);
+    const [audioQualities, setAudioQualities] = useState([]);
+    const [currentVideoLabel, setCurrentVideoLabel] = useState('AUTO');
+    const [currentAudioLabel, setCurrentAudioLabel] = useState('AUTO');
+    const [showQualityMenu, setShowQualityMenu] = useState(false);
+    const [showAudioMenu, setShowAudioMenu] = useState(false);
+
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const [volume, setVolume] = useState(1);
+    const [showControls, setShowControls] = useState(true);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [sponsorSegments, setSponsorSegments] = useState([]);
+    const [showSkipToast, setShowSkipToast] = useState(false);
+
+    const mediaRef = useRef(null);
+    const audioRef = useRef(null);
+    const hlsRef = useRef(null);
+    const controlsTimeoutRef = useRef(null);
+    const historyAdded = useRef(false);
+
+    const isWatchPage = location.pathname === '/watch';
+    const hasVideo = !!currentVideoId;
+
+    useEffect(() => {
+        if (isLive) return;
+        const video = mediaRef.current;
+        const audio = audioRef.current;
+        const sync = () => {
+            if (!video || !audio) return;
+            if (Math.abs(video.currentTime - audio.currentTime) > 0.25) audio.currentTime = video.currentTime;
+            if (video.paused !== audio.paused) video.paused ? audio.pause() : audio.play().catch(() => {});
+            if (video.playbackRate !== audio.playbackRate) audio.playbackRate = video.playbackRate;
+            if (audio.volume !== volume) audio.volume = volume;
+        };
+        const interval = setInterval(sync, 200);
+        return () => clearInterval(interval);
+    }, [playableUrl, audioUrl, volume, isLive]);
+
+    useGSAP(() => {
+        if (hasVideo && !isWatchPage) {
+            gsap.fromTo(containerRef.current, { y: 100, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "power4.out" });
+        }
+    }, [hasVideo, isWatchPage]);
+
+    const formatTime = (seconds) => {
+        if (!seconds || isNaN(seconds)) return "0:00";
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    };
+
+    useEffect(() => {
+        if (currentVideoId && window.api) {
+            historyAdded.current = false;
+            setRelatedVideos([]);
+            setRelatedShorts([]);
+            setChannelIcon(null);
+            setVideoQualities([]);
+            setAudioQualities([]);
+            setSponsorSegments([]);
+            setPlayableUrl(null);
+            setAudioUrl(null);
+            setIsLive(false);
+            setCurrentVideoLabel('AUTO');
+            setCurrentAudioLabel('AUTO');
+
+            if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+            if (sponsorBlockEnabled) window.api.getSponsorSegments(currentVideoId).then(res => res.success && setSponsorSegments(res.data));
+
+            window.api.getFormats(currentVideoId).then(result => {
+                if (result.success) {
+                    const data = result.data;
+                    setVideoInfo(data);
+
+                    const isLiveStream = data.is_live === true || data.live_status === 'is_live';
+
+                    if (isLiveStream) {
+                        setIsLive(true);
+                        let masterUrl = data.manifest_url || data.hls_manifest_url;
+                        if (!masterUrl && data.formats) {
+                            const masterFormat = data.formats.find(f => f.url && f.url.includes('master.m3u8'));
+                            if (masterFormat) masterUrl = masterFormat.url;
+                        }
+                        if (!masterUrl && data.url && (data.url.includes('.m3u8') || data.protocol === 'm3u8')) masterUrl = data.url;
+                        if (!masterUrl && data.formats) {
+                            const hlsFormats = data.formats.filter(f => f.protocol === 'm3u8' || f.ext === 'm3u8');
+                            if (hlsFormats.length > 0) {
+                                hlsFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
+                                masterUrl = hlsFormats[0].url;
+                            }
+                        }
+                        setPlayableUrl(masterUrl);
+                        setCurrentVideoLabel('AUTO');
+                    } else {
+                        const rawFormats = data.formats || [];
+                        const vOpts = rawFormats.filter(f => f.vcodec !== 'none').sort((a, b) => (b.height || 0) - (a.height || 0));
+                        const uniqueV = []; const seenV = new Set();
+                        vOpts.forEach(f => {
+                            if (!f.height) return;
+                            const isHDR = f.dynamic_range === 'HDR10' || f.dynamic_range === 'HLG';
+                            const label = `${f.height}p${isHDR ? ' HDR' : ''}`;
+                            const key = label + f.url;
+                            if(!seenV.has(key)) { seenV.add(key); uniqueV.push({ label, url: f.url, ...f }); }
+                        });
+                        setVideoQualities(uniqueV);
+
+                        const aOpts = rawFormats.filter(f => f.acodec !== 'none' && f.vcodec === 'none').sort((a, b) => (b.abr || 0) - (a.abr || 0));
+                        const uniqueA = [];
+                        aOpts.forEach(f => { if(!f.abr) return; uniqueA.push({ label: `${f.abr.toFixed(0)}kbps`, url: f.url, ...f }); });
+                        setAudioQualities(uniqueA);
+
+                        if (isAudioMode) {
+                            const bestAudio = uniqueA[0];
+                            if(bestAudio) { setAudioUrl(bestAudio.url); setCurrentAudioLabel(bestAudio.label); }
+                        } else {
+                            const bestVideo = uniqueV[0];
+                            const bestAudio = uniqueA[0];
+                            if (bestVideo) {
+                                setPlayableUrl(bestVideo.url);
+                                setCurrentVideoLabel(bestVideo.label);
+                                if (bestVideo.acodec !== 'none') { setAudioUrl(null); setCurrentAudioLabel('EMBEDDED'); }
+                                else { setAudioUrl(bestAudio ? bestAudio.url : null); if(bestAudio) setCurrentAudioLabel(bestAudio.label); }
+                            } else { setPlayableUrl(data.url); }
+                        }
+                    }
+
+                    // FIX: Handle structured object response from getChannelIcon
+                    if (data.channel_id) window.api.getChannelIcon(data.channel_id).then(iconRes => {
+                        if (iconRes.success) {
+                            if (typeof iconRes.data === 'object' && iconRes.data !== null && iconRes.data.icon) {
+                                setChannelIcon(iconRes.data.icon);
+                            } else if (typeof iconRes.data === 'string') {
+                                setChannelIcon(iconRes.data);
+                            }
+                        }
+                    });
+
+                    const catName = data.categories ? data.categories[0] : 'Unknown';
+                    const catId = categoryMap[catName] || null;
+                    if (!historyAdded.current) { window.api.addHistory(currentVideoId, data.title, data.uploader, data.channel_id, catId, catName); historyAdded.current = true; }
+                    if (catId) window.api.getTrendingByCategory(catId).then(rec => {
+                        if(rec.success) {
+                            const s = rec.data.filter(v => v.id !== currentVideoId && v.snippet.title.toLowerCase().includes('#shorts'));
+                            const v = rec.data.filter(v => v.id !== currentVideoId && !v.snippet.title.toLowerCase().includes('#shorts'));
+                            setRelatedShorts(s);
+                            setRelatedVideos(v);
+                        }
+                    });
+                }
+            });
+        }
+    }, [currentVideoId, setVideoInfo, sponsorBlockEnabled, isAudioMode]);
+
+    useEffect(() => {
+        const el = mediaRef.current;
+        if (!el || !playableUrl) return;
+        if (isLive && Hls.isSupported()) {
+            if (hlsRef.current) hlsRef.current.destroy();
+            const hls = new Hls({ startPosition: -1, liveSyncDurationCount: 3, xhrSetup: function(xhr) { xhr.withCredentials = false; } });
+            hls.loadSource(playableUrl);
+            hls.attachMedia(el);
+            hlsRef.current = hls;
+            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                const hlsLevels = data.levels.filter(l => l.height && l.height > 0).map((l, index) => ({ label: `${l.height}p`, index: index, height: l.height })).reverse();
+                hlsLevels.unshift({ label: 'AUTO', index: -1, height: 0 });
+                setVideoQualities(hlsLevels);
+                setCurrentVideoLabel('AUTO');
+                if (hls.audioTracks && hls.audioTracks.length > 0) {
+                    const hlsAudio = hls.audioTracks.map((track, index) => ({ label: track.name || `Track ${index + 1}`, index: index, id: track.id }));
+                    setAudioQualities(hlsAudio);
+                    if (hlsAudio.length > 1) setCurrentAudioLabel(hlsAudio[0].label);
+                }
+                el.play().catch(() => {});
+            });
+            return;
+        }
+        if (el.src !== playableUrl) {
+            const prevTime = el.currentTime;
+            el.src = playableUrl;
+            if (!isLive && prevTime > 0) el.currentTime = prevTime;
+            el.playbackRate = playbackRate;
+            el.play().catch(() => {});
+        }
+    }, [playableUrl, isLive]);
+
+    useEffect(() => {
+        const el = mediaRef.current;
+        if (!el) return;
+        const updateTime = () => {
+            setCurrentTime(el.currentTime);
+            if (!isLive && sponsorBlockEnabled && sponsorSegments.length > 0) {
+                for (const segment of sponsorSegments) {
+                    if (el.currentTime >= segment.segment[0] && el.currentTime < segment.segment[1]) {
+                        el.currentTime = segment.segment[1];
+                        if (audioRef.current) audioRef.current.currentTime = segment.segment[1];
+                        setShowSkipToast(true);
+                        setTimeout(() => setShowSkipToast(false), 2000);
+                        break;
+                    }
+                }
+            }
+        };
+        const updateDuration = () => setDuration(el.duration);
+        const onPlay = () => setIsPlaying(true);
+        const onPause = () => setIsPlaying(false);
+        el.addEventListener('timeupdate', updateTime);
+        el.addEventListener('loadedmetadata', updateDuration);
+        el.addEventListener('play', onPlay);
+        el.addEventListener('pause', onPause);
+        const onEnterPiP = () => setPipElement(el);
+        const onLeavePiP = () => clearPipElement();
+        el.addEventListener('enterpictureinpicture', onEnterPiP);
+        el.addEventListener('leavepictureinpicture', onLeavePiP);
+        return () => {
+            el.removeEventListener('timeupdate', updateTime);
+            el.removeEventListener('loadedmetadata', updateDuration);
+            el.removeEventListener('play', onPlay);
+            el.removeEventListener('pause', onPause);
+            el.removeEventListener('enterpictureinpicture', onEnterPiP);
+            el.removeEventListener('leavepictureinpicture', onLeavePiP);
+            clearPipElement();
+        };
+    }, [playableUrl, sponsorBlockEnabled, sponsorSegments, isLive]);
+
+    useEffect(() => {
+        const el = mediaRef.current;
+        if (playableUrl && el && el.src !== playableUrl && !isLive) {
+            const prevTime = el.currentTime; el.src = playableUrl; el.currentTime = prevTime; el.playbackRate = playbackRate; el.play().catch(console.warn);
+        }
+    }, [playableUrl]);
+
+    useEffect(() => { if (mediaRef.current) mediaRef.current.playbackRate = playbackRate; if (audioRef.current) audioRef.current.playbackRate = playbackRate; }, [playbackRate]);
+
+    const togglePlay = (e) => { e?.stopPropagation(); if (mediaRef.current) mediaRef.current.paused ? mediaRef.current.play() : mediaRef.current.pause(); };
+    const handleSeek = (e) => { if (isLive) return; const seekTime = parseFloat(e.target.value); if (mediaRef.current) mediaRef.current.currentTime = seekTime; if (audioRef.current) audioRef.current.currentTime = seekTime; setCurrentTime(seekTime); };
+    const handleVolume = (e) => { const val = parseFloat(e.target.value); setVolume(val); if (isLive) { if (mediaRef.current) mediaRef.current.volume = val; } else { if (audioRef.current) audioRef.current.volume = val; else if (mediaRef.current) mediaRef.current.volume = val; } };
+    const toggleFullscreen = (e) => { e?.stopPropagation(); if (!playerContainerRef.current) return; !document.fullscreenElement ? (playerContainerRef.current.requestFullscreen(), setIsFullscreen(true)) : (document.exitFullscreen(), setIsFullscreen(false)); };
+    const handleQualityChange = (q) => { setCurrentVideoLabel(q.label); if (isLive && hlsRef.current) { hlsRef.current.currentLevel = q.index; } else { const time = mediaRef.current ? mediaRef.current.currentTime : 0; setPlayableUrl(q.url); if (q.acodec && q.acodec !== 'none') { setAudioUrl(null); setCurrentAudioLabel('EMBEDDED'); } else { if (!audioUrl && audioQualities.length > 0) { setAudioUrl(audioQualities[0].url); setCurrentAudioLabel(audioQualities[0].label); } } setTimeout(() => { if(mediaRef.current) mediaRef.current.currentTime = time; }, 50); } setShowQualityMenu(false); };
+    const handleAudioQualityChange = (q) => { setCurrentAudioLabel(q.label); if (isLive && hlsRef.current) { hlsRef.current.audioTrack = q.index; } else { setAudioUrl(q.url); } setShowAudioMenu(false); };
+    const handleMouseMove = () => { setShowControls(true); if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current); controlsTimeoutRef.current = setTimeout(() => { if (isPlaying) setShowControls(false); }, 3000); };
+    const handleVideoEnd = () => { if (!isLive && autoplay && relatedVideos.length > 0) { playVideo(relatedVideos[0].id, isAudioMode); if (isWatchPage) navigate(`/watch?v=${relatedVideos[0].id}`); } };
+    const maximizePlayer = () => { if (!isWatchPage) navigate(`/watch?v=${currentVideoId}${isAudioMode ? '&audio=true' : ''}`); };
+    const handleMiniPlayer = async (e) => { e?.stopPropagation(); if (!mediaRef.current) return; if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await mediaRef.current.requestPictureInPicture(); };
+
+    if (!hasVideo) return null;
+
+    const containerClass = isWatchPage
+        ? "absolute inset-0 z-50 bg-[#0a100d] flex overflow-hidden"
+        : "fixed bottom-6 right-6 w-[480px] bg-[#18181b] rounded-2xl shadow-2xl shadow-black z-[100] border border-[#b9baa3]/20 flex flex-col overflow-hidden transition-all duration-500 hover:shadow-[#a22c29]/10 hover:border-[#a22c29]/40 group/mini";
+
+    const wrapperClass = isWatchPage ? "flex-1 flex flex-col p-0 md:p-4 overflow-y-auto custom-scrollbar" : "w-full flex-col";
+    const videoContainerClass = isWatchPage ? "w-full max-w-[1600px] mx-auto" : "w-full";
+    const videoAspectRatioClass = isWatchPage ? "relative bg-black rounded-xl overflow-hidden aspect-video border border-[#b9baa3]/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] ring-1 ring-white/5" : "relative w-full aspect-video bg-black group";
+
+    return (
+        <div className={containerClass} ref={containerRef}>
+            {showDownloadModal && videoInfo && <DownloadModal videoInfo={videoInfo} videoId={currentVideoId} onClose={() => setShowDownloadModal(false)} />}
+            {showSkipToast && <div className="absolute top-24 left-1/2 transform -translate-x-1/2 bg-[#a22c29] text-[#d6d5c9] px-4 py-1 rounded-sm shadow-[0_0_15px_rgba(162,44,41,0.6)] z-[60] font-mono text-xs font-bold uppercase tracking-widest border border-white/10">Ad Segment Neutralized</div>}
+            {!isWatchPage && <button onClick={(e) => { e.stopPropagation(); closeVideo(); }} className="absolute top-2 right-2 bg-black/40 hover:bg-[#a22c29] text-white rounded p-1 transition-colors z-30 backdrop-blur-sm"><svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>}
+
+            <div className={wrapperClass}>
+                <div className={videoContainerClass}>
+                    <div ref={playerContainerRef} className={videoAspectRatioClass} onMouseMove={isWatchPage ? handleMouseMove : undefined} onMouseLeave={isWatchPage ? () => isPlaying && setShowControls(false) : undefined} onDoubleClick={isWatchPage ? toggleFullscreen : undefined} onClick={!isWatchPage ? maximizePlayer : undefined}>
+                        <div className={`absolute inset-0 bg-[#0a100d] flex items-center justify-center z-0 ${isAudioMode ? 'block' : 'hidden'}`}>
+                            <img src={videoInfo?.thumbnail} className={`object-cover opacity-30 saturate-0 mix-blend-overlay ${isWatchPage ? 'h-full w-full absolute' : 'w-full h-full'}`} />
+                            <div className="absolute inset-0 bg-[radial-gradient(circle,_transparent_0%,_#0a100d_100%)]"></div>
+                            {!isWatchPage && <div className="absolute inset-0 flex items-center justify-center z-20"><div className="w-16 h-16 rounded-full border border-[#a22c29] flex items-center justify-center animate-pulse"><span className="text-2xl text-[#a22c29]">♪</span></div></div>}
+                        </div>
+
+                        <video key={currentVideoId} ref={mediaRef} className={`w-full h-full object-contain relative z-10 ${isAudioMode ? 'opacity-0' : 'opacity-100'}`} autoPlay onClick={isWatchPage ? togglePlay : undefined} onEnded={handleVideoEnd} />
+                        {!isLive && audioUrl && <audio ref={audioRef} src={audioUrl} autoPlay />}
+
+                        {isWatchPage && (
+                            <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#0a100d] via-[#0a100d]/90 to-transparent px-8 pb-8 pt-32 transition-opacity duration-300 z-20 ${showControls || !isPlaying ? 'opacity-100' : 'opacity-0'}`}>
+                                <div className="relative w-full h-0.5 bg-[#b9baa3]/20 cursor-pointer group/bar mb-6 hover:h-1.5 transition-all duration-200" onClick={(e) => e.stopPropagation()}>
+                                    {sponsorSegments.map(seg => { const start = (seg.segment[0] / duration) * 100; const width = ((seg.segment[1] - seg.segment[0]) / duration) * 100; return <div key={seg.UUID} className="absolute top-0 h-full bg-[#b9baa3]/60 z-10 pointer-events-none" style={{ left: `${start}%`, width: `${width}%` }} /> })}
+                                    <div className="absolute top-0 left-0 h-full bg-[#a22c29] z-20 pointer-events-none shadow-[0_0_10px_#a22c29]" style={{ width: `${(currentTime / duration) * 100}%` }} />
+                                    <div className="absolute top-1/2 -translate-y-1/2 -ml-1 w-3 h-3 bg-[#d6d5c9] shadow-[0_0_10px_#a22c29] rounded-full opacity-0 group-hover/bar:opacity-100 transition-opacity pointer-events-none z-40" style={{ left: `${(currentTime / duration) * 100}%` }}></div>
+                                    <input type="range" min="0" max={duration || 0} value={currentTime} onChange={handleSeek} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30" disabled={isLive} />
+                                </div>
+
+                                <div className="flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+                                    <div className="flex items-center gap-8">
+                                        <button onClick={togglePlay} className="text-[#d6d5c9] hover:text-[#a22c29] transition-colors scale-100 hover:scale-110 active:scale-95 duration-200">
+                                            {isPlaying ? <svg width="42" height="42" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg> : <svg width="42" height="42" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>}
+                                        </button>
+                                        <div className="flex items-center gap-3 group/vol">
+                                            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24" className="text-[#b9baa3]"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                                            <div className="w-24 h-1 bg-[#b9baa3]/20 relative rounded overflow-hidden">
+                                                <div className="absolute top-0 left-0 h-full bg-[#d6d5c9]" style={{width: `${volume * 100}%`}}></div>
+                                                <input type="range" min="0" max="1" step="0.05" value={volume} onChange={handleVolume} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-mono text-[#b9baa3] tracking-widest">{formatTime(currentTime)} <span className="text-[#a22c29] mx-1">/</span> {isLive ? 'LIVE' : formatTime(duration)}</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-4">
+                                        <div className="relative">
+                                            <button onClick={() => setShowQualityMenu(!showQualityMenu)} className="text-[10px] font-bold bg-[#b9baa3]/10 border border-[#b9baa3]/20 text-[#d6d5c9] px-3 py-1 rounded hover:bg-[#b9baa3]/20 hover:border-[#d6d5c9]/50 transition-all min-w-[60px] uppercase tracking-wider">{currentVideoLabel}</button>
+                                            {showQualityMenu && (
+                                                <>
+                                                    <div className="fixed inset-0 z-40" onClick={() => setShowQualityMenu(false)}></div>
+                                                    <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[120px] shadow-2xl flex flex-col-reverse max-h-64 overflow-y-auto custom-scrollbar">
+                                                        {videoQualities.map(q => <button key={q.label + q.url} onClick={() => handleQualityChange(q)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentVideoLabel === q.label ? 'text-[#a22c29] font-bold hover:text-white' : 'text-[#b9baa3]'}`}>{q.label}</button>)}
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                        <div className="relative">
+                                            <button onClick={() => setShowAudioMenu(!showAudioMenu)} className="text-[10px] font-bold bg-[#b9baa3]/10 border border-[#b9baa3]/20 text-[#d6d5c9] px-3 py-1 rounded hover:bg-[#b9baa3]/20 hover:border-[#d6d5c9]/50 transition-all min-w-[60px] uppercase tracking-wider max-w-[100px] truncate">{currentAudioLabel}</button>
+                                            {showAudioMenu && (
+                                                <>
+                                                    <div className="fixed inset-0 z-40" onClick={() => setShowAudioMenu(false)}></div>
+                                                    <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[120px] shadow-2xl flex flex-col-reverse max-h-64 overflow-y-auto custom-scrollbar">
+                                                        {audioQualities.map(q => <button key={q.label + q.url} onClick={() => handleAudioQualityChange(q)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentAudioLabel === q.label ? 'text-[#a22c29] font-bold hover:text-white' : 'text-[#b9baa3]'}`}>{q.label}</button>)}
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                        <button onClick={handleMiniPlayer} className="text-[#b9baa3] hover:text-white transition-colors"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/></svg></button>
+                                        <button onClick={toggleFullscreen} className="text-[#b9baa3] hover:text-white transition-colors"><svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    {isWatchPage && (
+                        <div className="mt-6 px-4">
+                            <h1 className="text-3xl font-bold leading-tight text-[#d6d5c9] font-sans tracking-tight">{videoInfo?.title || 'LOADING DATA...'}</h1>
+                            <div className="flex justify-between items-center mt-6 pb-6 border-b border-[#b9baa3]/10">
+                                <Link to={`/channel?id=${videoInfo?.channel_id}&title=${encodeURIComponent(videoInfo?.uploader)}`} className="flex items-center gap-4 group p-2 -ml-2 rounded hover:bg-[#b9baa3]/5 transition-all">
+                                    {channelIcon ? <img src={channelIcon} className="w-12 h-12 rounded shadow-lg border border-[#b9baa3]/20 transition-all" /> : <div className="w-12 h-12 rounded bg-[#b9baa3]/20"></div>}
+                                    <div><p className="text-lg font-bold text-[#d6d5c9] group-hover:text-[#a22c29] transition-colors font-mono tracking-tight">{videoInfo?.uploader}</p><p className="text-[10px] text-[#b9baa3]/60 uppercase tracking-widest">Verified Channel</p></div>
+                                </Link>
+                                <div className="flex gap-4 items-center">
+                                    <select value={playbackRate} onChange={(e) => setPlaybackRate(parseFloat(e.target.value))} className="bg-[#0a100d] text-[#b9baa3] text-xs px-4 py-3 rounded border border-[#b9baa3]/20 outline-none focus:border-[#a22c29] appearance-none cursor-pointer font-mono uppercase tracking-wider hover:bg-[#b9baa3]/5 transition-all"><option value="0.5">0.5x</option><option value="1">1x Speed</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
+                                    <button onClick={() => setShowDownloadModal(true)} disabled={isLive} className={`bg-[#d6d5c9] text-[#0a100d] px-6 py-3 rounded text-xs font-bold uppercase tracking-widest transition-all hover:bg-[#a22c29] hover:text-white hover:shadow-[0_0_20px_#a22c29] ${isLive ? 'opacity-50 cursor-not-allowed' : ''}`}>{isLive ? 'LIVE STREAM' : 'DOWNLOAD'}</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+            {isWatchPage && (
+                <div className="w-[400px] bg-[#0a100d] border-l border-[#b9baa3]/10 overflow-y-auto p-6 hidden xl:block custom-scrollbar">
+                    {relatedShorts.length > 0 && (
+                        <div className="mb-6 pb-6 border-b border-[#b9baa3]/10">
+                            <h3 className="text-xs font-bold mb-4 text-[#b9baa3]/60 uppercase tracking-[0.2em]">Related Shorts</h3>
+                            <div className="flex overflow-x-auto gap-2 pb-2 custom-scrollbar snap-x">
+                                {relatedShorts.map(s => (
+                                    <div key={s.id} onClick={() => navigate(`/watch?v=${s.id}`)} className="flex-shrink-0 w-[100px] aspect-[9/16] relative rounded overflow-hidden cursor-pointer border border-[#b9baa3]/10 hover:border-[#a22c29] transition-all snap-start">
+                                        <img src={s.snippet.thumbnails.medium.url} className="w-full h-full object-cover" />
+                                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"></div>
+                                        <p className="absolute bottom-2 left-2 right-2 text-[9px] font-bold text-white line-clamp-2 leading-tight">{s.snippet.title}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    <h3 className="text-xs font-bold mb-6 text-[#b9baa3]/60 uppercase tracking-[0.2em] border-b border-[#b9baa3]/10 pb-2">Queue</h3>
+                    <div className="flex flex-col gap-4">{relatedVideos.map(v => (
+                        <div key={v.id} onClick={() => { playVideo(v.id, isAudioMode); navigate(`/watch?v=${v.id}${isAudioMode ? '&audio=true' : ''}`) }} className="flex gap-4 cursor-pointer hover:bg-[#b9baa3]/5 p-2 rounded transition-all group">
+                            <div className="relative flex-shrink-0 overflow-hidden rounded w-32 aspect-video border border-[#b9baa3]/10 group-hover:border-[#a22c29]/50 transition-colors"><img src={v.snippet.thumbnails.default.url} className="w-full h-full object-cover transition-all duration-500" /></div>
+                            <div className="flex-1 min-w-0 pt-1"><p className="text-xs font-bold line-clamp-2 text-[#d6d5c9] leading-relaxed group-hover:text-[#a22c29] transition-colors">{v.snippet.title}</p><p className="text-[10px] text-[#b9baa3]/60 mt-2 font-mono uppercase">{v.snippet.channelTitle}</p></div>
+                        </div>
+                    ))}</div>
+                </div>
+            )}
+            {!isWatchPage && (
+                <div className="p-4 bg-[#0a100d] border-t border-[#b9baa3]/10 flex justify-between items-center cursor-pointer hover:bg-[#b9baa3]/5 transition-colors" onClick={maximizePlayer}>
+                    <div className="truncate flex-1 pr-4"><p className="text-xs font-bold truncate text-[#d6d5c9] font-mono">{videoInfo?.title || 'WAITING FOR INPUT...'}</p><p className="text-[10px] text-[#a22c29] font-bold uppercase tracking-widest mt-1">{videoInfo?.uploader}</p></div>
+                    {isAudioMode && <span className="text-[8px] bg-[#a22c29]/10 text-[#a22c29] px-2 py-1 rounded border border-[#a22c29]/20 font-mono font-bold tracking-widest">AUDIO ONLY</span>}
+                </div>
+            )}
+        </div>
+    );
+}
+export default GlobalPlayer;

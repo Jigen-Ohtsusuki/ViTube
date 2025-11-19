@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const authManager = require('./authManager');
@@ -17,7 +17,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 let mainWindow;
 
 function createWindow() {
-    mainWindow = new BrowserWindow({
+    const windowOptions = {
         width: 1280,
         height: 720,
         backgroundColor: '#0f0f0f',
@@ -30,9 +30,17 @@ function createWindow() {
             webviewTag: true
         },
         show: false
-    });
+    };
 
-    // INTERCEPTOR: Fixes Live Streams (CORS) and Profile Images (429 Errors)
+    // FIX: Hide menu bar only in production build (!isDev)
+    if (!isDev) {
+        windowOptions.autoHideMenuBar = true;
+        windowOptions.menu = null;
+        Menu.setApplicationMenu(null);
+    }
+
+    mainWindow = new BrowserWindow(windowOptions);
+
     session.defaultSession.webRequest.onBeforeSendHeaders(
         {
             urls: [
@@ -43,8 +51,6 @@ function createWindow() {
             ]
         },
         (details, callback) => {
-            // For images, sometimes no-referrer is better, but usually YouTube referrer works.
-            // If 429 persists, we might need to rotate User-Agents, but this usually fixes it.
             details.requestHeaders['Referer'] = 'https://www.youtube.com/';
             details.requestHeaders['Origin'] = 'https://www.youtube.com';
             callback({ cancel: false, requestHeaders: details.requestHeaders });
@@ -66,10 +72,9 @@ function createWindow() {
 app.whenReady().then(() => {
     db.initDatabase();
 
-    // NEW: Check if user is already logged in on app start
     ipcMain.handle('auth:check', async () => {
         const tokens = authManager.getTokens();
-        return !!tokens; // Returns true if tokens exist
+        return !!tokens;
     });
 
     ipcMain.handle('auth:login', async () => {
@@ -174,8 +179,8 @@ app.whenReady().then(() => {
 
     ipcMain.handle('youtube:getChannelIcon', async (event, channelId) => {
         try {
-            const url = await youtubeClient.getChannelIcon(channelId);
-            return { success: true, data: url };
+            const channelInfo = await youtubeClient.getChannelIcon(channelId);
+            return { success: true, data: channelInfo };
         } catch (error) {
             return { success: false, error: error.message };
         }
