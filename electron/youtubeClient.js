@@ -439,6 +439,56 @@ async function rateComment(commentId, rating) {
     }
 }
 
+async function rateVideo(videoId, rating) {
+    try {
+        const client = authManager.getClient();
+        await youtube.videos.rate({
+            auth: client,
+            id: videoId,
+            rating: rating
+        });
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+async function getVideoRating(videoId) {
+    try {
+        const client = authManager.getClient();
+        const response = await youtube.videos.getRating({
+            auth: client,
+            id: videoId
+        });
+        return { success: true, rating: response.data.items[0]?.rating || 'none' };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+// NEW: Get public stats for exact count
+async function getVideoStats(videoId) {
+    try {
+        const response = await executeWithRetry(async (currentKey) => {
+            return await youtube.videos.list({
+                key: currentKey,
+                part: 'statistics',
+                id: videoId
+            });
+        });
+        if (response.data.items && response.data.items.length > 0) {
+            return {
+                likeCount: response.data.items[0].statistics.likeCount,
+                viewCount: response.data.items[0].statistics.viewCount,
+                commentCount: response.data.items[0].statistics.commentCount
+            };
+        }
+        return null;
+    } catch (error) {
+        console.error("Stats fetch failed:", error.message);
+        return null;
+    }
+}
 
 module.exports = {
     getSearchSuggestions,
@@ -459,5 +509,8 @@ module.exports = {
     postComment,
     getCommentReplies,
     replyToComment,
-    rateComment
+    rateComment,
+    rateVideo,
+    getVideoRating,
+    getVideoStats
 };

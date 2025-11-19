@@ -31,5 +31,9 @@ contextBridge.exposeInMainWorld('api', {
 
     getReplies: (parentId) => ipcRenderer.invoke('youtube:getReplies', parentId),
     replyToComment: (parentId, text) => ipcRenderer.invoke('youtube:replyToComment', parentId, text),
-    rateComment: (commentId, rating) => ipcRenderer.invoke('youtube:rateComment', commentId, rating)
+    rateComment: (commentId, rating) => ipcRenderer.invoke('youtube:rateComment', commentId, rating),
+
+    rateVideo: (videoId, rating) => ipcRenderer.invoke('youtube:rateVideo', videoId, rating),
+    getVideoRating: (videoId) => ipcRenderer.invoke('youtube:getVideoRating', videoId),
+    getVideoStats: (videoId) => ipcRenderer.invoke('youtube:getVideoStats', videoId)
 });

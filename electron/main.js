@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, session, Menu } = require('electron');
 const path = require('path');
-constLx = require('fs');
+const fs = require('fs');
 const authManager = require('./authManager');
 const youtubeClient = require('./youtubeClient');
 const ytDlpService = require('./ytDlpService');
@@ -252,6 +252,34 @@ app.whenReady().then(() => {
     ipcMain.handle('youtube:rateComment', async (event, commentId, rating) => {
         try {
             const result = await youtubeClient.rateComment(commentId, rating);
+            return { success: true, data: result };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('youtube:rateVideo', async (event, videoId, rating) => {
+        try {
+            const result = await youtubeClient.rateVideo(videoId, rating);
+            return { success: true, data: result };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('youtube:getVideoRating', async (event, videoId) => {
+        try {
+            const result = await youtubeClient.getVideoRating(videoId);
+            return { success: true, data: result };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    // NEW: Get Stats
+    ipcMain.handle('youtube:getVideoStats', async (event, videoId) => {
+        try {
+            const result = await youtubeClient.getVideoStats(videoId);
             return { success: true, data: result };
         } catch (error) {
             return { success: false, error: error.message };

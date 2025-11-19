@@ -18,6 +18,10 @@ function GlobalPlayer() {
     const containerRef = useRef(null);
     const playerContainerRef = useRef(null);
 
+    // Refs for animation
+    const likeCountRef = useRef(null);
+    const lastActionTime = useRef(0);
+
     const [playableUrl, setPlayableUrl] = useState(null);
     const [audioUrl, setAudioUrl] = useState(null);
     const [isLive, setIsLive] = useState(false);
@@ -46,10 +50,13 @@ function GlobalPlayer() {
     const [isSubscribed, setIsSubscribed] = useState(false);
     const [isModifyingSub, setIsModifyingSub] = useState(false);
 
+    const [userRating, setUserRating] = useState('none');
+    const [likeCount, setLikeCount] = useState(0);
+    const [isRating, setIsRating] = useState(false);
+
     const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
     const descriptionRef = useRef(null);
     const [showExpandButton, setShowExpandButton] = useState(false);
-
 
     const mediaRef = useRef(null);
     const audioRef = useRef(null);
@@ -60,12 +67,130 @@ function GlobalPlayer() {
     const isWatchPage = location.pathname === '/watch';
     const hasVideo = !!currentVideoId;
 
+    // GSAP Animation for Like Count (Responsive & Smooth)
+    useEffect(() => {
+        if (likeCountRef.current) {
+            const currentDisplay = parseFloat(likeCountRef.current.innerText.replace(/,/g, '')) || 0;
+            const target = likeCount;
+
+            // If difference is small (1), animate quickly. If large (live update), smooth it out.
+            const diff = Math.abs(target - currentDisplay);
+            const duration = diff <= 1 ? 0.3 : 1.5;
+
+            const startVal = { val: currentDisplay };
+
+            gsap.to(startVal, {
+                val: target,
+                duration: duration,
+                ease: "power1.out", // Smoother for continuous updates
+                onUpdate: () => {
+                    if (likeCountRef.current) {
+                        likeCountRef.current.innerText = Math.round(startVal.val).toLocaleString();
+                    }
+                }
+            });
+
+            if (diff === 1) {
+                // Only pop for user interaction
+                gsap.fromTo(likeCountRef.current.parentElement,
+                    { scale: 1.1, color: '#a22c29' },
+                    { scale: 1, color: userRating === 'like' ? '#a22c29' : '#b9baa3', duration: 0.2 }
+                );
+            }
+        }
+    }, [likeCount]); // Removed userRating dependency to avoid re-animating on rating state change alone
+
+    // Recursive Polling for "No Gap" Live Updates
+    useEffect(() => {
+        let isMounted = true;
+        let timeoutId = null;
+
+        if (!currentVideoId || !window.api.getVideoStats) return;
+
+        const fetchStatsLoop = async () => {
+            if (!isMounted) return;
+
+            // Only fetch if user hasn't clicked recently (prevents UI jitter during click)
+            if (Date.now() - lastActionTime.current > 2000) {
+                try {
+                    const res = await window.api.getVideoStats(currentVideoId);
+                    if (res.success && res.data && isMounted) {
+                        const serverCount = parseInt(res.data.likeCount || 0);
+                        if (!isNaN(serverCount)) {
+                            // Only update if different to prevent unnecessary renders
+                            setLikeCount(prev => {
+                                if (prev !== serverCount) return serverCount;
+                                return prev;
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error("Stats polling error", e);
+                }
+            }
+
+            // Schedule next fetch immediately (approx 500ms delay to be kind to CPU/Network)
+            // Reduce to 100ms if you have unlimited quota and want it faster
+            timeoutId = setTimeout(fetchStatsLoop, 500);
+        };
+
+        fetchStatsLoop();
+
+        return () => {
+            isMounted = false;
+            if (timeoutId) clearTimeout(timeoutId);
+        };
+    }, [currentVideoId]);
+
     const checkStatus = async (channelId) => {
         if (!window.api.checkSubscription) return;
         const res = await window.api.checkSubscription(channelId);
         if (res.success) {
             setIsSubscribed(res.data.isSubscribed);
         }
+    };
+
+    const checkRating = async (videoId) => {
+        if (!window.api.getVideoRating) return;
+        const rateRes = await window.api.getVideoRating(videoId);
+        if (rateRes.success) {
+            setUserRating(rateRes.data.rating);
+        }
+    };
+
+    const handleRating = async (newRating) => {
+        if (!currentVideoId || isRating) return;
+        setIsRating(true);
+        lastActionTime.current = Date.now(); // Pause polling
+
+        const previousRating = userRating;
+        const finalRating = previousRating === newRating ? 'none' : newRating;
+
+        // Precise Delta Calculation
+        let delta = 0;
+
+        if (previousRating === 'like') delta -= 1;     // Remove existing like
+        // Note: YouTube public stats usually don't show dislikes, so removing dislike doesn't change like count
+
+        if (finalRating === 'like') delta += 1;        // Add new like
+
+        // Apply Optimistic Updates
+        setUserRating(finalRating);
+        setLikeCount(prev => Math.max(0, prev + delta));
+
+        try {
+            const res = await window.api.rateVideo(currentVideoId, finalRating);
+            if (!res.success) {
+                // Revert
+                setUserRating(previousRating);
+                setLikeCount(prev => Math.max(0, prev - delta));
+            }
+        } catch (e) {
+            setUserRating(previousRating);
+            setLikeCount(prev => Math.max(0, prev - delta));
+        }
+
+        setIsRating(false);
     };
 
     const handleSubscribe = async (channelId) => {
@@ -216,10 +341,14 @@ function GlobalPlayer() {
             setCurrentVideoLabel('AUTO');
             setCurrentAudioLabel('AUTO');
             setIsDescriptionExpanded(false);
+            setUserRating('none');
+            // Reset handled by poller to avoid flash
 
             if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
             if (sponsorBlockEnabled) window.api.getSponsorSegments(currentVideoId).then(res => res.success && setSponsorSegments(res.data));
+
+            checkRating(currentVideoId);
 
             window.api.getFormats(currentVideoId).then(result => {
                 if (result.success) {
@@ -308,41 +437,6 @@ function GlobalPlayer() {
 
         return cleanupHls;
     }, [currentVideoId, setVideoInfo, sponsorBlockEnabled, isAudioMode]);
-
-    useEffect(() => {
-        const checkHeight = () => {
-            if (descriptionRef.current) {
-                const isOverflowing = descriptionRef.current.scrollHeight > 48;
-                setShowExpandButton(isOverflowing);
-            }
-        };
-
-        const timer = setTimeout(checkHeight, 50);
-
-        return () => clearTimeout(timer);
-    }, [videoInfo?.description, isDescriptionExpanded]);
-
-
-    useEffect(() => {
-        if (isLive) return;
-        const video = mediaRef.current;
-        const audio = audioRef.current;
-        const sync = () => {
-            if (!video || !audio) return;
-            if (Math.abs(video.currentTime - audio.currentTime) > 0.25) audio.currentTime = video.currentTime;
-            if (video.paused !== audio.paused) video.paused ? audio.pause() : audio.play().catch(() => {});
-            if (video.playbackRate !== audio.playbackRate) audio.playbackRate = video.playbackRate;
-            if (audio.volume !== volume) audio.volume = volume;
-        };
-        const interval = setInterval(sync, 200);
-        return () => clearInterval(interval);
-    }, [playableUrl, audioUrl, volume, isLive]);
-
-    useGSAP(() => {
-        if (hasVideo && !isWatchPage) {
-            gsap.fromTo(containerRef.current, { y: 100, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "power4.out" });
-        }
-    }, [hasVideo, isWatchPage]);
 
     useEffect(() => {
         const el = mediaRef.current;
@@ -554,6 +648,26 @@ function GlobalPlayer() {
                                 </div>
 
                                 <div className="flex gap-4 items-center">
+                                    {/* LIKE BUTTON WITH COUNT */}
+                                    <div className="flex items-center bg-[#0a100d] border border-[#b9baa3]/20 rounded-full overflow-hidden group/likes">
+                                        <button
+                                            onClick={() => handleRating('like')}
+                                            disabled={isRating}
+                                            className={`pl-4 pr-3 py-2.5 flex items-center gap-2 transition-all hover:bg-[#a22c29]/10 ${userRating === 'like' ? 'text-[#a22c29] font-bold' : 'text-[#b9baa3] hover:text-[#a22c29]'}`}
+                                        >
+                                            <svg width="18" height="18" fill={userRating === 'like' ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
+                                            <span ref={likeCountRef} className="text-xs font-mono tabular-nums">{Number(likeCount).toLocaleString()}</span>
+                                        </button>
+                                        <div className="w-px h-6 bg-[#b9baa3]/20"></div>
+                                        <button
+                                            onClick={() => handleRating('dislike')}
+                                            disabled={isRating}
+                                            className={`pr-4 pl-3 py-2.5 flex items-center transition-all hover:bg-[#a22c29]/10 ${userRating === 'dislike' ? 'text-[#a22c29] font-bold' : 'text-[#b9baa3] hover:text-[#a22c29]'}`}
+                                        >
+                                            <svg width="18" height="18" fill={userRating === 'dislike' ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path></svg>
+                                        </button>
+                                    </div>
+
                                     <select value={playbackRate} onChange={(e) => setPlaybackRate(parseFloat(e.target.value))} className="bg-[#0a100d] text-[#b9baa3] text-xs px-4 py-3 rounded border border-[#b9baa3]/20 outline-none focus:border-[#a22c29] appearance-none cursor-pointer font-mono uppercase tracking-wider hover:bg-[#b9baa3]/5 transition-all"><option value="0.5">0.5x</option><option value="1">1x Speed</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
                                     <button onClick={() => setShowDownloadModal(true)} disabled={isLive} className={`bg-[#d6d5c9] text-[#0a100d] px-6 py-3 rounded text-xs font-bold uppercase tracking-widest transition-all hover:bg-[#a22c29] hover:text-white hover:shadow-[0_0_20px_#a22c29] ${isLive ? 'opacity-50 cursor-not-allowed' : ''}`}>{isLive ? 'LIVE STREAM' : 'DOWNLOAD'}</button>
                                 </div>
