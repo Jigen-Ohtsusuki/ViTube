@@ -1,0 +1,33 @@
+.waves {
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    pointer-events: none; /* IMPORTANT: Let clicks pass through to buttons */
+    z-index: 0; /* Behind content */
+}
+
+.waves::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0.5rem;
+    height: 0.5rem;
+    background: #a22c29;
+    border-radius: 50%;
+    transform: translate3d(calc(var(--x) - 50%), calc(var(--y) - 50%), 0);
+    will-change: transform;
+    pointer-events: none;
+    opacity: 0; /* Hidden by default, uncomment to see a follower dot */
+}
+
+.waves-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
