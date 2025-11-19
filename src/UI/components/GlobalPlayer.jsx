@@ -6,6 +6,7 @@ import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import Hls from 'hls.js';
 import DownloadModal from './DownloadModal';
+import CommentsSection from './CommentsSection';
 
 function GlobalPlayer() {
     const { currentVideoId, isAudioMode, videoInfo, setVideoInfo, closeVideo, playVideo } = useAppStore();
@@ -577,6 +578,9 @@ function GlobalPlayer() {
                                     )}
                                 </div>
                             )}
+
+                            <CommentsSection key={currentVideoId} videoId={currentVideoId} />
+
                         </div>
                     )}
                 </div>

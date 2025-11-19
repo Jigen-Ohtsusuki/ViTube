@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, session, Menu } = require('electron');
 const path = require('path');
-const fs = require('fs');
+constLx = require('fs');
 const authManager = require('./authManager');
 const youtubeClient = require('./youtubeClient');
 const ytDlpService = require('./ytDlpService');
@@ -186,7 +186,6 @@ app.whenReady().then(() => {
         }
     });
 
-    // NEW: Subscription Check
     ipcMain.handle('youtube:checkSubscription', async (event, channelId) => {
         try {
             const status = await youtubeClient.checkSubscriptionStatus(channelId);
@@ -196,7 +195,6 @@ app.whenReady().then(() => {
         }
     });
 
-    // NEW: Subscription Modify
     ipcMain.handle('youtube:modifySubscription', async (event, channelId, action) => {
         try {
             const result = await youtubeClient.modifySubscription(channelId, action);
@@ -210,6 +208,51 @@ app.whenReady().then(() => {
         try {
             const segments = await youtubeClient.getSponsorSegments(videoId);
             return { success: true, data: segments };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('youtube:getComments', async (event, videoId, pageToken, order) => {
+        try {
+            const result = await youtubeClient.getVideoComments(videoId, pageToken, order);
+            return { success: true, data: result };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('youtube:postComment', async (event, videoId, text) => {
+        try {
+            const result = await youtubeClient.postComment(videoId, text);
+            return { success: true, data: result };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('youtube:getReplies', async (event, parentId) => {
+        try {
+            const result = await youtubeClient.getCommentReplies(parentId);
+            return { success: true, data: result };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('youtube:replyToComment', async (event, parentId, text) => {
+        try {
+            const result = await youtubeClient.replyToComment(parentId, text);
+            return { success: true, data: result };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('youtube:rateComment', async (event, commentId, rating) => {
+        try {
+            const result = await youtubeClient.rateComment(commentId, rating);
+            return { success: true, data: result };
         } catch (error) {
             return { success: false, error: error.message };
         }

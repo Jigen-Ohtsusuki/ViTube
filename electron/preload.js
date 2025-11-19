@@ -24,5 +24,12 @@ contextBridge.exposeInMainWorld('api', {
     getHistory: () => ipcRenderer.invoke('db:getHistory'),
 
     checkSubscription: (channelId) => ipcRenderer.invoke('youtube:checkSubscription', channelId),
-    modifySubscription: (channelId, action) => ipcRenderer.invoke('youtube:modifySubscription', channelId, action)
+    modifySubscription: (channelId, action) => ipcRenderer.invoke('youtube:modifySubscription', channelId, action),
+
+    getComments: (videoId, pageToken, order) => ipcRenderer.invoke('youtube:getComments', videoId, pageToken, order),
+    postComment: (videoId, text) => ipcRenderer.invoke('youtube:postComment', videoId, text),
+
+    getReplies: (parentId) => ipcRenderer.invoke('youtube:getReplies', parentId),
+    replyToComment: (parentId, text) => ipcRenderer.invoke('youtube:replyToComment', parentId, text),
+    rateComment: (commentId, rating) => ipcRenderer.invoke('youtube:rateComment', commentId, rating)
 });

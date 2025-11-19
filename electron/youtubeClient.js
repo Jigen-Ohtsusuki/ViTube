@@ -341,6 +341,104 @@ async function modifySubscription(channelId, action) {
     throw new Error('Invalid subscription action.');
 }
 
+async function getVideoComments(videoId, pageToken = null, order = 'relevance') {
+    try {
+        const response = await executeWithRetry(async (currentKey) => {
+            const params = {
+                key: currentKey,
+                part: 'snippet,replies',
+                videoId: videoId,
+                maxResults: 20,
+                order: order,
+                textFormat: 'plainText'
+            };
+            if (pageToken) params.pageToken = pageToken;
+            return await youtube.commentThreads.list(params);
+        });
+        return {
+            items: response.data.items || [],
+            nextPageToken: response.data.nextPageToken || null
+        };
+    } catch (error) {
+        console.error("Comments fetch failed:", error.message);
+        return { items: [], nextPageToken: null };
+    }
+}
+
+async function postComment(videoId, text) {
+    try {
+        const client = authManager.getClient();
+        const response = await youtube.commentThreads.insert({
+            auth: client,
+            part: 'snippet',
+            resource: {
+                snippet: {
+                    videoId: videoId,
+                    topLevelComment: {
+                        snippet: {
+                            textOriginal: text
+                        }
+                    }
+                }
+            }
+        });
+        return response.data;
+    } catch (error) {
+        throw new Error(`Failed to post comment: ${error.message}`);
+    }
+}
+
+async function getCommentReplies(parentId) {
+    try {
+        const response = await executeWithRetry(async (currentKey) => {
+            return await youtube.comments.list({
+                key: currentKey,
+                part: 'snippet',
+                parentId: parentId,
+                maxResults: 100,
+                textFormat: 'plainText'
+            });
+        });
+        return response.data.items || [];
+    } catch (error) {
+        console.error("Replies fetch failed:", error.message);
+        return [];
+    }
+}
+
+async function replyToComment(parentId, text) {
+    try {
+        const client = authManager.getClient();
+        const response = await youtube.comments.insert({
+            auth: client,
+            part: 'snippet',
+            resource: {
+                snippet: {
+                    parentId: parentId,
+                    textOriginal: text
+                }
+            }
+        });
+        return response.data;
+    } catch (error) {
+        throw new Error(`Failed to reply: ${error.message}`);
+    }
+}
+
+async function rateComment(commentId, rating) {
+    try {
+        const client = authManager.getClient();
+        await youtube.comments.setRating({
+            auth: client,
+            id: commentId,
+            rating: rating
+        });
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
 
 module.exports = {
     getSearchSuggestions,
@@ -356,5 +454,10 @@ module.exports = {
     getChannelIcon,
     getSponsorSegments,
     checkSubscriptionStatus,
-    modifySubscription
+    modifySubscription,
+    getVideoComments,
+    postComment,
+    getCommentReplies,
+    replyToComment,
+    rateComment
 };
