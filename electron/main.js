@@ -6,6 +6,7 @@ const youtubeClient = require('./youtubeClient');
 const ytDlpService = require('./ytDlpService');
 const db = require('./database');
 const downloadManager = require('./downloadManager');
+const dotenv = require('dotenv');
 
 const isDev = !app.isPackaged;
 
@@ -32,7 +33,6 @@ function createWindow() {
         show: false
     };
 
-    // FIX: Hide menu bar only in production build (!isDev)
     if (!isDev) {
         windowOptions.autoHideMenuBar = true;
         windowOptions.menu = null;
@@ -181,6 +181,26 @@ app.whenReady().then(() => {
         try {
             const channelInfo = await youtubeClient.getChannelIcon(channelId);
             return { success: true, data: channelInfo };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    // NEW: Subscription Check
+    ipcMain.handle('youtube:checkSubscription', async (event, channelId) => {
+        try {
+            const status = await youtubeClient.checkSubscriptionStatus(channelId);
+            return { success: true, data: status };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    // NEW: Subscription Modify
+    ipcMain.handle('youtube:modifySubscription', async (event, channelId, action) => {
+        try {
+            const result = await youtubeClient.modifySubscription(channelId, action);
+            return { success: true, data: result };
         } catch (error) {
             return { success: false, error: error.message };
         }

@@ -42,6 +42,9 @@ function GlobalPlayer() {
     const [sponsorSegments, setSponsorSegments] = useState([]);
     const [showSkipToast, setShowSkipToast] = useState(false);
 
+    const [isSubscribed, setIsSubscribed] = useState(false);
+    const [isModifyingSub, setIsModifyingSub] = useState(false);
+
     const mediaRef = useRef(null);
     const audioRef = useRef(null);
     const hlsRef = useRef(null);
@@ -50,6 +53,35 @@ function GlobalPlayer() {
 
     const isWatchPage = location.pathname === '/watch';
     const hasVideo = !!currentVideoId;
+
+    const checkStatus = async (channelId) => {
+        if (!window.api.checkSubscription) return;
+        const res = await window.api.checkSubscription(channelId);
+        if (res.success) {
+            setIsSubscribed(res.data.isSubscribed);
+        }
+    };
+
+    const handleSubscribe = async (channelId) => {
+        if (!channelId || !window.api.modifySubscription || isModifyingSub) return;
+
+        setIsModifyingSub(true);
+        const action = isSubscribed ? 'unsubscribe' : 'subscribe';
+
+        try {
+            const res = await window.api.modifySubscription(channelId, action);
+            if (res.success) {
+                setIsSubscribed(!isSubscribed);
+            } else {
+                alert(`Error: ${res.error}`);
+            }
+        } catch(e) {
+            alert(`Error processing request: ${e.message}`);
+        } finally {
+            setIsModifyingSub(false);
+        }
+    };
+
 
     useEffect(() => {
         if (isLive) return;
@@ -154,16 +186,18 @@ function GlobalPlayer() {
                         }
                     }
 
-                    // FIX: Handle structured object response from getChannelIcon
-                    if (data.channel_id) window.api.getChannelIcon(data.channel_id).then(iconRes => {
-                        if (iconRes.success) {
-                            if (typeof iconRes.data === 'object' && iconRes.data !== null && iconRes.data.icon) {
-                                setChannelIcon(iconRes.data.icon);
-                            } else if (typeof iconRes.data === 'string') {
-                                setChannelIcon(iconRes.data);
+                    if (data.channel_id) {
+                        window.api.getChannelIcon(data.channel_id).then(iconRes => {
+                            if (iconRes.success) {
+                                if (typeof iconRes.data === 'object' && iconRes.data !== null && iconRes.data.icon) {
+                                    setChannelIcon(iconRes.data.icon);
+                                } else if (typeof iconRes.data === 'string') {
+                                    setChannelIcon(iconRes.data);
+                                }
                             }
-                        }
-                    });
+                        });
+                        checkStatus(data.channel_id);
+                    }
 
                     const catName = data.categories ? data.categories[0] : 'Unknown';
                     const catId = categoryMap[catName] || null;
@@ -357,11 +391,37 @@ function GlobalPlayer() {
                     {isWatchPage && (
                         <div className="mt-6 px-4">
                             <h1 className="text-3xl font-bold leading-tight text-[#d6d5c9] font-sans tracking-tight">{videoInfo?.title || 'LOADING DATA...'}</h1>
+
                             <div className="flex justify-between items-center mt-6 pb-6 border-b border-[#b9baa3]/10">
-                                <Link to={`/channel?id=${videoInfo?.channel_id}&title=${encodeURIComponent(videoInfo?.uploader)}`} className="flex items-center gap-4 group p-2 -ml-2 rounded hover:bg-[#b9baa3]/5 transition-all">
-                                    {channelIcon ? <img src={channelIcon} className="w-12 h-12 rounded shadow-lg border border-[#b9baa3]/20 transition-all" /> : <div className="w-12 h-12 rounded bg-[#b9baa3]/20"></div>}
-                                    <div><p className="text-lg font-bold text-[#d6d5c9] group-hover:text-[#a22c29] transition-colors font-mono tracking-tight">{videoInfo?.uploader}</p><p className="text-[10px] text-[#b9baa3]/60 uppercase tracking-widest">Verified Channel</p></div>
-                                </Link>
+
+                                {/* START: Channel Info Block (Avatar + Name) */}
+                                <div className="flex items-center gap-4">
+                                    {/* Link should ONLY wrap the avatar and text */}
+                                    <Link to={`/channel?id=${videoInfo?.channel_id}&title=${encodeURIComponent(videoInfo?.uploader)}`} className="flex items-center gap-4 group p-2 -ml-2 rounded hover:bg-[#b9baa3]/5 transition-all">
+                                        {channelIcon ? <img src={channelIcon} className="w-12 h-12 rounded shadow-lg border border-[#b9baa3]/20 transition-all" /> : <div className="w-12 h-12 rounded bg-[#b9baa3]/20"></div>}
+                                        <div>
+                                            <p className="text-lg font-bold text-[#d6d5c9] group-hover:text-[#a22c29] transition-colors font-mono tracking-tight">{videoInfo?.uploader}</p>
+                                            <span className="text-[10px] text-[#b9baa3]/60 uppercase tracking-widest">Verified Channel</span>
+                                        </div>
+                                    </Link>
+
+                                    {/* FIX: Subscribe button is now a separate child outside the Link */}
+                                    <button
+                                        onClick={() => handleSubscribe(videoInfo?.channel_id)}
+                                        disabled={isModifyingSub || !videoInfo?.channel_id}
+                                        className={`
+                                            text-xs font-bold uppercase tracking-widest px-4 py-1.5 rounded-full transition-all duration-200
+                                            ${isModifyingSub || !videoInfo?.channel_id ? 'bg-[#b9baa3]/20 text-[#b9baa3]/80 cursor-wait' : isSubscribed
+                                            ? 'bg-[#b9baa3]/10 text-[#b9baa3] border border-[#b9baa3]/30 hover:bg-[#a22c29] hover:text-white'
+                                            : 'bg-[#a22c29] text-white border border-[#a22c29] hover:bg-white hover:text-[#a22c29]'
+                                        }
+                                        `}
+                                    >
+                                        {isModifyingSub ? '...' : isSubscribed ? 'Subscribed' : 'Subscribe'}
+                                    </button>
+                                </div>
+                                {/* END: Channel Info Block */}
+
                                 <div className="flex gap-4 items-center">
                                     <select value={playbackRate} onChange={(e) => setPlaybackRate(parseFloat(e.target.value))} className="bg-[#0a100d] text-[#b9baa3] text-xs px-4 py-3 rounded border border-[#b9baa3]/20 outline-none focus:border-[#a22c29] appearance-none cursor-pointer font-mono uppercase tracking-wider hover:bg-[#b9baa3]/5 transition-all"><option value="0.5">0.5x</option><option value="1">1x Speed</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
                                     <button onClick={() => setShowDownloadModal(true)} disabled={isLive} className={`bg-[#d6d5c9] text-[#0a100d] px-6 py-3 rounded text-xs font-bold uppercase tracking-widest transition-all hover:bg-[#a22c29] hover:text-white hover:shadow-[0_0_20px_#a22c29] ${isLive ? 'opacity-50 cursor-not-allowed' : ''}`}>{isLive ? 'LIVE STREAM' : 'DOWNLOAD'}</button>

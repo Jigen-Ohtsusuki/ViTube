@@ -289,6 +289,59 @@ async function getChannelIcon(channelId) {
     }
 }
 
+async function checkSubscriptionStatus(channelId) {
+    try {
+        const client = authManager.getClient();
+        const response = await youtube.subscriptions.list({
+            auth: client,
+            part: 'id',
+            forChannelId: channelId,
+            mine: true
+        });
+        const isSubscribed = response.data.items.length > 0;
+        return { isSubscribed: isSubscribed, subscriptionId: isSubscribed ? response.data.items[0].id : null };
+    } catch (error) {
+        return { isSubscribed: false, subscriptionId: null };
+    }
+}
+
+async function modifySubscription(channelId, action) {
+    const client = authManager.getClient();
+
+    if (action === 'subscribe') {
+        const response = await youtube.subscriptions.insert({
+            auth: client,
+            part: 'snippet',
+            resource: {
+                snippet: {
+                    resourceId: {
+                        kind: 'youtube#channel',
+                        channelId: channelId
+                    }
+                }
+            }
+        });
+        return { success: true, id: response.data.id };
+    } else if (action === 'unsubscribe') {
+        const status = await checkSubscriptionStatus(channelId);
+        let subscriptionId;
+
+        if (status.isSubscribed) {
+            subscriptionId = status.subscriptionId;
+        } else {
+            throw new Error('Not currently subscribed.');
+        }
+
+        await youtube.subscriptions.delete({
+            auth: client,
+            id: subscriptionId
+        });
+        return { success: true, id: subscriptionId };
+    }
+    throw new Error('Invalid subscription action.');
+}
+
+
 module.exports = {
     getSearchSuggestions,
     getMySubscriptions,
@@ -301,5 +354,7 @@ module.exports = {
     getChannelPlaylists,
     getPlaylistItems,
     getChannelIcon,
-    getSponsorSegments
+    getSponsorSegments,
+    checkSubscriptionStatus,
+    modifySubscription
 };

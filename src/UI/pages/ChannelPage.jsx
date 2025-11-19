@@ -22,26 +22,57 @@ function ChannelPage() {
     const [channelIcon, setChannelIcon] = useState(null);
     const [channelBanner, setChannelBanner] = useState(null);
 
+    const [isSubscribed, setIsSubscribed] = useState(false);
+    const [isModifyingSub, setIsModifyingSub] = useState(false);
+
     const navigate = useNavigate();
     const containerRef = useRef(null);
+
+    const checkStatus = async (channelId) => {
+        if (!window.api.checkSubscription) return;
+        const res = await window.api.checkSubscription(channelId);
+        if (res.success) {
+            setIsSubscribed(res.data.isSubscribed);
+        }
+    };
+
+    const handleSubscribe = async () => {
+        if (!id || !window.api.modifySubscription || isModifyingSub) return;
+
+        setIsModifyingSub(true);
+        const action = isSubscribed ? 'unsubscribe' : 'subscribe';
+
+        try {
+            const res = await window.api.modifySubscription(id, action);
+            if (res.success) {
+                setIsSubscribed(!isSubscribed);
+            } else {
+                alert(`Error: ${res.error}`);
+            }
+        } catch(e) {
+            alert(`Error processing request: ${e.message}`);
+        } finally {
+            setIsModifyingSub(false);
+        }
+    };
+
 
     useEffect(() => {
         if (!id || !window.api) return;
 
-        // 1. Fetch Channel Info (Icon and Banner in one call) and Log Response
+        // 1. Fetch Info & Check Status
         window.api.getChannelIcon(id).then(r => {
-            console.log("Channel Info Response (Icon/Banner):", r);
             if (r.success && typeof r.data === 'object' && r.data !== null) {
-                // Handles the new, desired object structure { icon: 'url', banner: 'url', ... }
+                // Handles the structured object response
                 r.data.icon && setChannelIcon(r.data.icon);
                 r.data.banner && setChannelBanner(r.data.banner);
             } else if (r.success && typeof r.data === 'string') {
-                // Fallback for old behavior (plain icon URL string)
+                // Fallback for old simple string response
                 setChannelIcon(r.data);
             }
         });
 
-        // Removed separate failing getChannelBanner call entirely.
+        checkStatus(id);
 
         const loadContent = async (tab) => {
             setIsLoading(true);
@@ -49,7 +80,6 @@ function ChannelPage() {
             try {
                 if (tab === 'videos') {
                     const result = await window.api.getChannelContent(id, 'video');
-                    console.log(`Channel Content (${tab}) Response:`, result);
                     if (result.success) {
                         const s = result.data.filter(v => {
                             const t = v.snippet.title.toLowerCase();
@@ -66,11 +96,9 @@ function ChannelPage() {
                     } else setStatus(result.error);
                 } else if (tab === 'live') {
                     const result = await window.api.getChannelContent(id, 'live');
-                    console.log(`Channel Content (${tab}) Response:`, result);
                     if (result.success) setStreams(result.data); else setStatus(result.error);
                 } else if (tab === 'playlists') {
                     const result = await window.api.getChannelPlaylists(id);
-                    console.log(`Channel Content (${tab}) Response:`, result);
                     if (result.success) setPlaylists(result.data); else setStatus(result.error);
                 }
                 setStatus('');
@@ -138,11 +166,27 @@ function ChannelPage() {
                         <div className="w-20 h-20 md:w-24 md:h-24 rounded-full bg-[#b9baa3]/20 border-4 border-[#0a100d]"></div>
                     )}
 
-                    <div className="mb-2">
+                    <div className="mb-2 flex flex-col justify-end h-full">
                         <h2 className="text-2xl md:text-4xl font-black text-[#d6d5c9] tracking-tight uppercase drop-shadow-lg">{decodeURIComponent(title)}</h2>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="flex items-center gap-4 mt-1">
                             <span className="text-[10px] font-bold bg-[#a22c29] text-white px-2 py-0.5 rounded border border-[#a22c29]/50 shadow-[0_0_10px_#a22c29]">VERIFIED</span>
                             <span className="text-[10px] text-[#b9baa3] font-mono uppercase tracking-widest drop-shadow-md">Official Channel</span>
+
+                            {/* Subscribe Button */}
+                            <button
+                                onClick={handleSubscribe}
+                                disabled={isModifyingSub}
+                                className={`
+                                    text-xs font-bold uppercase tracking-widest px-4 py-2 rounded-full transition-all duration-200
+                                    ${isModifyingSub ? 'bg-[#b9baa3]/20 text-[#b9baa3]/80 cursor-wait' : isSubscribed
+                                    ? 'bg-[#b9baa3]/10 text-[#b9baa3] border border-[#b9baa3]/30 hover:bg-[#a22c29] hover:text-white'
+                                    : 'bg-[#a22c29] text-white border border-[#a22c29] hover:bg-white hover:text-[#a22c29]'
+                                }
+                                `}
+                            >
+                                {isModifyingSub ? '...' : isSubscribed ? 'Subscribed' : 'Subscribe'}
+                            </button>
+
                         </div>
                     </div>
                 </div>

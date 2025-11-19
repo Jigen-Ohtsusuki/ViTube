@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
-    checkAuth: () => ipcRenderer.invoke('auth:check'), // NEW
+    checkAuth: () => ipcRenderer.invoke('auth:check'),
     login: () => ipcRenderer.invoke('auth:login'),
     getSubscriptions: () => ipcRenderer.invoke('youtube:getSubscriptions'),
     getMyPlaylists: () => ipcRenderer.invoke('youtube:getMyPlaylists'),
@@ -21,5 +21,8 @@ contextBridge.exposeInMainWorld('api', {
     startDownload: (videoId, videoFormatId, audioFormatId) => ipcRenderer.invoke('download:start', videoId, videoFormatId, audioFormatId),
     addHistory: (videoId, title, channel, channelId, categoryId, categoryName) =>
         ipcRenderer.invoke('db:addHistory', videoId, title, channel, channelId, categoryId, categoryName),
-    getHistory: () => ipcRenderer.invoke('db:getHistory')
+    getHistory: () => ipcRenderer.invoke('db:getHistory'),
+
+    checkSubscription: (channelId) => ipcRenderer.invoke('youtube:checkSubscription', channelId),
+    modifySubscription: (channelId, action) => ipcRenderer.invoke('youtube:modifySubscription', channelId, action)
 });

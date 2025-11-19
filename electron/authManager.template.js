@@ -23,7 +23,8 @@ let currentKeyIndex = 0;
 
 const SCOPES = [
     'https://www.googleapis.com/auth/youtube.readonly',
-    'https://www.googleapis.com/auth/youtube.force-ssl'
+    'https://www.googleapis.com/auth/youtube.force-ssl',
+    'https://www.googleapis.com/auth/youtube'
 ];
 
 const tokenPath = path.join(app.getPath('userData'), 'tokens.json');
