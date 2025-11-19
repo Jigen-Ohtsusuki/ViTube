@@ -45,6 +45,11 @@ function GlobalPlayer() {
     const [isSubscribed, setIsSubscribed] = useState(false);
     const [isModifyingSub, setIsModifyingSub] = useState(false);
 
+    const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
+    const descriptionRef = useRef(null);
+    const [showExpandButton, setShowExpandButton] = useState(false);
+
+
     const mediaRef = useRef(null);
     const audioRef = useRef(null);
     const hlsRef = useRef(null);
@@ -82,6 +87,88 @@ function GlobalPlayer() {
         }
     };
 
+    const parseDescription = (text) => {
+        if (!text) return null;
+
+        const parts = [];
+        let key = 0;
+
+        const urlRegex = /(https?:\/\/[^\s]+)/;
+        const timestampRegex = /(\d{1,2}:\d{2}(?::\d{2})?)/;
+
+        const combinedRegex = new RegExp(`(${urlRegex.source})|(${timestampRegex.source})`, 'g');
+
+        const paragraphs = text.split('\n');
+
+        paragraphs.forEach((paragraph, pIndex) => {
+            let lastIndex = 0;
+
+            const matches = [...paragraph.matchAll(combinedRegex)];
+
+            matches.forEach(match => {
+                const matchStart = match.index;
+                const matchEnd = match.index + match[0].length;
+
+                if (matchStart > lastIndex) {
+                    parts.push(<span key={key++}>{paragraph.substring(lastIndex, matchStart)}</span>);
+                }
+
+                const segment = match[0];
+                const isLink = !!match[1];
+                const isTimestamp = !!match[3];
+
+                if (isLink) {
+                    parts.push(
+                        <a
+                            key={key++}
+                            href={segment}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[#a22c29] hover:underline transition-colors"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            {segment}
+                        </a>
+                    );
+                } else if (isTimestamp) {
+                    const timeArray = segment.split(':').map(Number);
+                    let seconds = 0;
+                    if (timeArray.length === 3) {
+                        seconds = timeArray[0] * 3600 + timeArray[1] * 60 + timeArray[2];
+                    } else if (timeArray.length === 2) {
+                        seconds = timeArray[0] * 60 + timeArray[1];
+                    }
+
+                    parts.push(
+                        <button
+                            key={key++}
+                            onClick={() => {
+                                if (mediaRef.current) mediaRef.current.currentTime = seconds;
+                                if (audioRef.current) audioRef.current.currentTime = seconds;
+                            }}
+                            className="text-[#a22c29] hover:underline transition-colors font-bold"
+                        >
+                            {segment}
+                        </button>
+                    );
+                }
+
+                lastIndex = matchEnd;
+            });
+
+            if (lastIndex < paragraph.length) {
+                parts.push(<span key={key++}>{paragraph.substring(lastIndex)}</span>);
+            }
+
+            if (pIndex < paragraphs.length - 1) {
+                parts.push(<br key={key++} />);
+                parts.push(<br key={key++} />);
+            }
+        });
+
+        return parts;
+    };
+
 
     useEffect(() => {
         if (isLive) return;
@@ -112,6 +199,8 @@ function GlobalPlayer() {
     };
 
     useEffect(() => {
+        let cleanupHls = () => {};
+
         if (currentVideoId && window.api) {
             historyAdded.current = false;
             setRelatedVideos([]);
@@ -125,8 +214,10 @@ function GlobalPlayer() {
             setIsLive(false);
             setCurrentVideoLabel('AUTO');
             setCurrentAudioLabel('AUTO');
+            setIsDescriptionExpanded(false);
 
             if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+
             if (sponsorBlockEnabled) window.api.getSponsorSegments(currentVideoId).then(res => res.success && setSponsorSegments(res.data));
 
             window.api.getFormats(currentVideoId).then(result => {
@@ -213,43 +304,91 @@ function GlobalPlayer() {
                 }
             });
         }
+
+        return cleanupHls;
     }, [currentVideoId, setVideoInfo, sponsorBlockEnabled, isAudioMode]);
 
     useEffect(() => {
-        const el = mediaRef.current;
-        if (!el || !playableUrl) return;
-        if (isLive && Hls.isSupported()) {
-            if (hlsRef.current) hlsRef.current.destroy();
-            const hls = new Hls({ startPosition: -1, liveSyncDurationCount: 3, xhrSetup: function(xhr) { xhr.withCredentials = false; } });
-            hls.loadSource(playableUrl);
-            hls.attachMedia(el);
-            hlsRef.current = hls;
-            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                const hlsLevels = data.levels.filter(l => l.height && l.height > 0).map((l, index) => ({ label: `${l.height}p`, index: index, height: l.height })).reverse();
-                hlsLevels.unshift({ label: 'AUTO', index: -1, height: 0 });
-                setVideoQualities(hlsLevels);
-                setCurrentVideoLabel('AUTO');
-                if (hls.audioTracks && hls.audioTracks.length > 0) {
-                    const hlsAudio = hls.audioTracks.map((track, index) => ({ label: track.name || `Track ${index + 1}`, index: index, id: track.id }));
-                    setAudioQualities(hlsAudio);
-                    if (hlsAudio.length > 1) setCurrentAudioLabel(hlsAudio[0].label);
-                }
-                el.play().catch(() => {});
-            });
-            return;
+        const checkHeight = () => {
+            if (descriptionRef.current) {
+                const isOverflowing = descriptionRef.current.scrollHeight > 48;
+                setShowExpandButton(isOverflowing);
+            }
+        };
+
+        const timer = setTimeout(checkHeight, 50);
+
+        return () => clearTimeout(timer);
+    }, [videoInfo?.description, isDescriptionExpanded]);
+
+
+    useEffect(() => {
+        if (isLive) return;
+        const video = mediaRef.current;
+        const audio = audioRef.current;
+        const sync = () => {
+            if (!video || !audio) return;
+            if (Math.abs(video.currentTime - audio.currentTime) > 0.25) audio.currentTime = video.currentTime;
+            if (video.paused !== audio.paused) video.paused ? audio.pause() : audio.play().catch(() => {});
+            if (video.playbackRate !== audio.playbackRate) audio.playbackRate = video.playbackRate;
+            if (audio.volume !== volume) audio.volume = volume;
+        };
+        const interval = setInterval(sync, 200);
+        return () => clearInterval(interval);
+    }, [playableUrl, audioUrl, volume, isLive]);
+
+    useGSAP(() => {
+        if (hasVideo && !isWatchPage) {
+            gsap.fromTo(containerRef.current, { y: 100, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "power4.out" });
         }
-        if (el.src !== playableUrl) {
-            const prevTime = el.currentTime;
-            el.src = playableUrl;
-            if (!isLive && prevTime > 0) el.currentTime = prevTime;
-            el.playbackRate = playbackRate;
-            el.play().catch(() => {});
-        }
-    }, [playableUrl, isLive]);
+    }, [hasVideo, isWatchPage]);
 
     useEffect(() => {
         const el = mediaRef.current;
         if (!el) return;
+
+        let hlsCleanup = () => {};
+
+        if (isLive && playableUrl && Hls.isSupported()) {
+            if (hlsRef.current) hlsRef.current.destroy();
+            hlsRef.current = new Hls();
+            hlsRef.current.loadSource(playableUrl);
+            hlsRef.current.attachMedia(el);
+
+            hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
+                const levels = hlsRef.current.levels
+                    .map((level, index) => ({
+                        label: level.height ? `${level.height}p` : 'Unknown',
+                        url: playableUrl,
+                        index: index,
+                        height: level.height || 0
+                    }))
+                    .sort((a, b) => b.height - a.height);
+                setVideoQualities(levels);
+
+                const audioTracks = hlsRef.current.audioTracks.map((track, index) => ({
+                    label: track.name,
+                    url: playableUrl,
+                    index: index,
+                }));
+                setAudioQualities(audioTracks);
+
+                el.play().catch(console.warn);
+            });
+
+            hlsCleanup = () => {
+                if (hlsRef.current) {
+                    hlsRef.current.destroy();
+                    hlsRef.current = null;
+                }
+            };
+
+        } else if (playableUrl && !isLive) {
+            el.src = playableUrl;
+            el.playbackRate = playbackRate;
+            el.play().catch(console.warn);
+        }
+
         const updateTime = () => {
             setCurrentTime(el.currentTime);
             if (!isLive && sponsorBlockEnabled && sponsorSegments.length > 0) {
@@ -275,7 +414,9 @@ function GlobalPlayer() {
         const onLeavePiP = () => clearPipElement();
         el.addEventListener('enterpictureinpicture', onEnterPiP);
         el.addEventListener('leavepictureinpicture', onLeavePiP);
+
         return () => {
+            hlsCleanup();
             el.removeEventListener('timeupdate', updateTime);
             el.removeEventListener('loadedmetadata', updateDuration);
             el.removeEventListener('play', onPlay);
@@ -284,14 +425,7 @@ function GlobalPlayer() {
             el.removeEventListener('leavepictureinpicture', onLeavePiP);
             clearPipElement();
         };
-    }, [playableUrl, sponsorBlockEnabled, sponsorSegments, isLive]);
-
-    useEffect(() => {
-        const el = mediaRef.current;
-        if (playableUrl && el && el.src !== playableUrl && !isLive) {
-            const prevTime = el.currentTime; el.src = playableUrl; el.currentTime = prevTime; el.playbackRate = playbackRate; el.play().catch(console.warn);
-        }
-    }, [playableUrl]);
+    }, [playableUrl, isLive, sponsorBlockEnabled, sponsorSegments, playbackRate]);
 
     useEffect(() => { if (mediaRef.current) mediaRef.current.playbackRate = playbackRate; if (audioRef.current) audioRef.current.playbackRate = playbackRate; }, [playbackRate]);
 
@@ -364,8 +498,8 @@ function GlobalPlayer() {
                                             {showQualityMenu && (
                                                 <>
                                                     <div className="fixed inset-0 z-40" onClick={() => setShowQualityMenu(false)}></div>
-                                                    <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[120px] shadow-2xl flex flex-col-reverse max-h-64 overflow-y-auto custom-scrollbar">
-                                                        {videoQualities.map(q => <button key={q.label + q.url} onClick={() => handleQualityChange(q)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentVideoLabel === q.label ? 'text-[#a22c29] font-bold hover:text-white' : 'text-[#b9baa3]'}`}>{q.label}</button>)}
+                                                    <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[120px] shadow-2xl flex flex-col max-h-64 overflow-y-auto custom-scrollbar">
+                                                        {videoQualities.map(q => <button key={q.label + (q.index || q.url)} onClick={() => handleQualityChange(q)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentVideoLabel === q.label ? 'text-[#a22c29] font-bold hover:text-white' : 'text-[#b9baa3]'}`}>{q.label}</button>)}
                                                     </div>
                                                 </>
                                             )}
@@ -375,8 +509,8 @@ function GlobalPlayer() {
                                             {showAudioMenu && (
                                                 <>
                                                     <div className="fixed inset-0 z-40" onClick={() => setShowAudioMenu(false)}></div>
-                                                    <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[120px] shadow-2xl flex flex-col-reverse max-h-64 overflow-y-auto custom-scrollbar">
-                                                        {audioQualities.map(q => <button key={q.label + q.url} onClick={() => handleAudioQualityChange(q)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentAudioLabel === q.label ? 'text-[#a22c29] font-bold hover:text-white' : 'text-[#b9baa3]'}`}>{q.label}</button>)}
+                                                    <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[120px] shadow-2xl flex flex-col max-h-64 overflow-y-auto custom-scrollbar">
+                                                        {audioQualities.map(q => <button key={q.label + (q.index || q.url)} onClick={() => handleAudioQualityChange(q)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentAudioLabel === q.label ? 'text-[#a22c29] font-bold hover:text-white' : 'text-[#b9baa3]'}`}>{q.label}</button>)}
                                                     </div>
                                                 </>
                                             )}
@@ -394,10 +528,8 @@ function GlobalPlayer() {
 
                             <div className="flex justify-between items-center mt-6 pb-6 border-b border-[#b9baa3]/10">
 
-                                {/* START: Channel Info Block (Avatar + Name) */}
-                                <div className="flex items-center gap-4">
-                                    {/* Link should ONLY wrap the avatar and text */}
-                                    <Link to={`/channel?id=${videoInfo?.channel_id}&title=${encodeURIComponent(videoInfo?.uploader)}`} className="flex items-center gap-4 group p-2 -ml-2 rounded hover:bg-[#b9baa3]/5 transition-all">
+                                <div className="flex items-center justify-start gap-4">
+                                    <Link to={`/channel?id=${videoInfo?.channel_id}&title=${encodeURIComponent(videoInfo?.uploader)}`} className="flex items-center gap-4 group p-2 -ml-2 rounded hover:bg-[#b9baa3]/5 transition-all flex-shrink-0">
                                         {channelIcon ? <img src={channelIcon} className="w-12 h-12 rounded shadow-lg border border-[#b9baa3]/20 transition-all" /> : <div className="w-12 h-12 rounded bg-[#b9baa3]/20"></div>}
                                         <div>
                                             <p className="text-lg font-bold text-[#d6d5c9] group-hover:text-[#a22c29] transition-colors font-mono tracking-tight">{videoInfo?.uploader}</p>
@@ -405,7 +537,6 @@ function GlobalPlayer() {
                                         </div>
                                     </Link>
 
-                                    {/* FIX: Subscribe button is now a separate child outside the Link */}
                                     <button
                                         onClick={() => handleSubscribe(videoInfo?.channel_id)}
                                         disabled={isModifyingSub || !videoInfo?.channel_id}
@@ -420,13 +551,32 @@ function GlobalPlayer() {
                                         {isModifyingSub ? '...' : isSubscribed ? 'Subscribed' : 'Subscribe'}
                                     </button>
                                 </div>
-                                {/* END: Channel Info Block */}
 
                                 <div className="flex gap-4 items-center">
                                     <select value={playbackRate} onChange={(e) => setPlaybackRate(parseFloat(e.target.value))} className="bg-[#0a100d] text-[#b9baa3] text-xs px-4 py-3 rounded border border-[#b9baa3]/20 outline-none focus:border-[#a22c29] appearance-none cursor-pointer font-mono uppercase tracking-wider hover:bg-[#b9baa3]/5 transition-all"><option value="0.5">0.5x</option><option value="1">1x Speed</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
                                     <button onClick={() => setShowDownloadModal(true)} disabled={isLive} className={`bg-[#d6d5c9] text-[#0a100d] px-6 py-3 rounded text-xs font-bold uppercase tracking-widest transition-all hover:bg-[#a22c29] hover:text-white hover:shadow-[0_0_20px_#a22c29] ${isLive ? 'opacity-50 cursor-not-allowed' : ''}`}>{isLive ? 'LIVE STREAM' : 'DOWNLOAD'}</button>
                                 </div>
                             </div>
+
+                            {videoInfo?.description && (
+                                <div className="mt-6 p-4 rounded-xl bg-[#b9baa3]/5 border border-[#b9baa3]/10 text-xs text-[#d6d5c9] font-mono">
+                                    <div
+                                        ref={descriptionRef}
+                                        className={`transition-all duration-300 overflow-hidden ${isDescriptionExpanded ? 'max-h-full' : 'max-h-12'}`}
+                                    >
+                                        {parseDescription(videoInfo.description)}
+                                    </div>
+
+                                    {showExpandButton && (
+                                        <button
+                                            onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
+                                            className="mt-2 text-[#a22c29] font-bold text-[11px] uppercase hover:underline"
+                                        >
+                                            {isDescriptionExpanded ? 'Show Less' : 'Show More'}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
