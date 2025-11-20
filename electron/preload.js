@@ -35,5 +35,17 @@ contextBridge.exposeInMainWorld('api', {
 
     rateVideo: (videoId, rating) => ipcRenderer.invoke('youtube:rateVideo', videoId, rating),
     getVideoRating: (videoId) => ipcRenderer.invoke('youtube:getVideoRating', videoId),
-    getVideoStats: (videoId) => ipcRenderer.invoke('youtube:getVideoStats', videoId)
+    getVideoStats: (videoId) => ipcRenderer.invoke('youtube:getVideoStats', videoId),
+
+    // Window Controls
+    minimizeWindow: () => ipcRenderer.send('window:minimize'),
+    maximizeWindow: () => ipcRenderer.send('window:maximize'),
+    closeWindow: () => ipcRenderer.send('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    onMaximized: (callback) => ipcRenderer.on('window:maximized', callback),
+    onUnmaximized: (callback) => ipcRenderer.on('window:unmaximized', callback),
+    removeWindowListeners: () => {
+        ipcRenderer.removeAllListeners('window:maximized');
+        ipcRenderer.removeAllListeners('window:unmaximized');
+    }
 });

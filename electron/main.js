@@ -22,6 +22,8 @@ function createWindow() {
         width: 1280,
         height: 720,
         backgroundColor: '#0f0f0f',
+        frame: false, // Custom Title Bar
+        titleBarStyle: 'hidden',
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -40,6 +42,13 @@ function createWindow() {
     }
 
     mainWindow = new BrowserWindow(windowOptions);
+
+    mainWindow.on('maximize', () => {
+        mainWindow.webContents.send('window:maximized');
+    });
+    mainWindow.on('unmaximize', () => {
+        mainWindow.webContents.send('window:unmaximized');
+    });
 
     session.defaultSession.webRequest.onBeforeSendHeaders(
         {
@@ -71,6 +80,22 @@ function createWindow() {
 
 app.whenReady().then(() => {
     db.initDatabase();
+
+    ipcMain.on('window:minimize', () => mainWindow?.minimize());
+
+    ipcMain.on('window:maximize', () => {
+        if (mainWindow) {
+            if (mainWindow.isMaximized()) {
+                mainWindow.unmaximize();
+            } else {
+                mainWindow.maximize();
+            }
+        }
+    });
+
+    ipcMain.on('window:close', () => mainWindow?.close());
+
+    ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized());
 
     ipcMain.handle('auth:check', async () => {
         const tokens = authManager.getTokens();
@@ -276,7 +301,6 @@ app.whenReady().then(() => {
         }
     });
 
-    // NEW: Get Stats
     ipcMain.handle('youtube:getVideoStats', async (event, videoId) => {
         try {
             const result = await youtubeClient.getVideoStats(videoId);
