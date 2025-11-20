@@ -7,6 +7,7 @@ const ytDlpService = require('./ytDlpService');
 const db = require('./database');
 const downloadManager = require('./downloadManager');
 const dotenv = require('dotenv');
+const https = require('https');
 
 const isDev = !app.isPackaged;
 
@@ -22,7 +23,7 @@ function createWindow() {
         width: 1280,
         height: 720,
         backgroundColor: '#0f0f0f',
-        frame: false, // Custom Title Bar
+        frame: false,
         titleBarStyle: 'hidden',
         webPreferences: {
             nodeIntegration: false,
@@ -308,6 +309,18 @@ app.whenReady().then(() => {
         } catch (error) {
             return { success: false, error: error.message };
         }
+    });
+
+    ipcMain.handle('youtube:getSubtitleContent', async (event, url) => {
+        return new Promise((resolve) => {
+            https.get(url, (res) => {
+                let data = '';
+                res.on('data', (chunk) => { data += chunk; });
+                res.on('end', () => { resolve({ success: true, data }); });
+            }).on('error', (err) => {
+                resolve({ success: false, error: err.message });
+            });
+        });
     });
 
     ipcMain.handle('ytdlp:getFormats', async (event, videoId) => {

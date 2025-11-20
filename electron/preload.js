@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('api', {
     getVideoRating: (videoId) => ipcRenderer.invoke('youtube:getVideoRating', videoId),
     getVideoStats: (videoId) => ipcRenderer.invoke('youtube:getVideoStats', videoId),
 
+    getSubtitleContent: (url) => ipcRenderer.invoke('youtube:getSubtitleContent', url),
+
     // Window Controls
     minimizeWindow: () => ipcRenderer.send('window:minimize'),
     maximizeWindow: () => ipcRenderer.send('window:maximize'),

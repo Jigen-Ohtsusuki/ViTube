@@ -7,6 +7,7 @@ import { useGSAP } from '@gsap/react';
 import Hls from 'hls.js';
 import DownloadModal from './DownloadModal';
 import CommentsSection from './CommentsSection';
+import { IconBadgeCc, IconBadgeCcFilled, IconLanguage } from '@tabler/icons-react';
 
 function GlobalPlayer() {
     const { currentVideoId, isAudioMode, videoInfo, setVideoInfo, closeVideo, playVideo } = useAppStore();
@@ -18,7 +19,6 @@ function GlobalPlayer() {
     const containerRef = useRef(null);
     const playerContainerRef = useRef(null);
 
-    // Refs for animation
     const likeCountRef = useRef(null);
     const lastActionTime = useRef(0);
 
@@ -37,6 +37,11 @@ function GlobalPlayer() {
     const [currentAudioLabel, setCurrentAudioLabel] = useState('AUTO');
     const [showQualityMenu, setShowQualityMenu] = useState(false);
     const [showAudioMenu, setShowAudioMenu] = useState(false);
+
+    // AUDIO LANGUAGE STATE
+    const [audioTracks, setAudioTracks] = useState([]);
+    const [currentLanguage, setCurrentLanguage] = useState('Default');
+    const [showLangMenu, setShowLangMenu] = useState(false);
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -58,6 +63,12 @@ function GlobalPlayer() {
     const descriptionRef = useRef(null);
     const [showExpandButton, setShowExpandButton] = useState(false);
 
+    // SUBTITLES
+    const [subtitles, setSubtitles] = useState([]);
+    const [currentSubtitle, setCurrentSubtitle] = useState(null);
+    const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
+    const [subtitleTrackUrl, setSubtitleTrackUrl] = useState(null);
+
     const mediaRef = useRef(null);
     const audioRef = useRef(null);
     const hlsRef = useRef(null);
@@ -67,22 +78,21 @@ function GlobalPlayer() {
     const isWatchPage = location.pathname === '/watch';
     const hasVideo = !!currentVideoId;
 
-    // GSAP Animation for Like Count (Responsive & Smooth)
+    const langName = new Intl.DisplayNames(['en'], { type: 'language' });
+
+    // GSAP Animation for Like Count
     useEffect(() => {
         if (likeCountRef.current) {
             const currentDisplay = parseFloat(likeCountRef.current.innerText.replace(/,/g, '')) || 0;
             const target = likeCount;
-
-            // If difference is small (1), animate quickly. If large (live update), smooth it out.
             const diff = Math.abs(target - currentDisplay);
             const duration = diff <= 1 ? 0.3 : 1.5;
-
             const startVal = { val: currentDisplay };
 
             gsap.to(startVal, {
                 val: target,
                 duration: duration,
-                ease: "power1.out", // Smoother for continuous updates
+                ease: "power1.out",
                 onUpdate: () => {
                     if (likeCountRef.current) {
                         likeCountRef.current.innerText = Math.round(startVal.val).toLocaleString();
@@ -91,16 +101,15 @@ function GlobalPlayer() {
             });
 
             if (diff === 1) {
-                // Only pop for user interaction
                 gsap.fromTo(likeCountRef.current.parentElement,
                     { scale: 1.1, color: '#a22c29' },
                     { scale: 1, color: userRating === 'like' ? '#a22c29' : '#b9baa3', duration: 0.2 }
                 );
             }
         }
-    }, [likeCount]); // Removed userRating dependency to avoid re-animating on rating state change alone
+    }, [likeCount]);
 
-    // Recursive Polling for "No Gap" Live Updates
+    // Polling
     useEffect(() => {
         let isMounted = true;
         let timeoutId = null;
@@ -109,15 +118,12 @@ function GlobalPlayer() {
 
         const fetchStatsLoop = async () => {
             if (!isMounted) return;
-
-            // Only fetch if user hasn't clicked recently (prevents UI jitter during click)
             if (Date.now() - lastActionTime.current > 2000) {
                 try {
                     const res = await window.api.getVideoStats(currentVideoId);
                     if (res.success && res.data && isMounted) {
                         const serverCount = parseInt(res.data.likeCount || 0);
                         if (!isNaN(serverCount)) {
-                            // Only update if different to prevent unnecessary renders
                             setLikeCount(prev => {
                                 if (prev !== serverCount) return serverCount;
                                 return prev;
@@ -128,19 +134,48 @@ function GlobalPlayer() {
                     console.error("Stats polling error", e);
                 }
             }
-
-            // Schedule next fetch immediately (approx 500ms delay to be kind to CPU/Network)
-            // Reduce to 100ms if you have unlimited quota and want it faster
             timeoutId = setTimeout(fetchStatsLoop, 500);
         };
-
         fetchStatsLoop();
-
-        return () => {
-            isMounted = false;
-            if (timeoutId) clearTimeout(timeoutId);
-        };
+        return () => { isMounted = false; if (timeoutId) clearTimeout(timeoutId); };
     }, [currentVideoId]);
+
+    const handleAudioLanguageChange = (track) => {
+        const time = mediaRef.current ? mediaRef.current.currentTime : 0;
+        setAudioUrl(track.url);
+        setCurrentLanguage(track.label);
+        setShowLangMenu(false);
+        setTimeout(() => {
+            if(mediaRef.current) mediaRef.current.currentTime = time;
+            if(audioRef.current) audioRef.current.currentTime = time;
+        }, 50);
+    };
+
+    // Subtitle Logic
+    const handleSubtitleChange = async (sub) => {
+        setCurrentSubtitle(sub);
+        setShowSubtitleMenu(false);
+
+        if (subtitleTrackUrl) {
+            URL.revokeObjectURL(subtitleTrackUrl);
+            setSubtitleTrackUrl(null);
+        }
+
+        if (sub === null) return;
+
+        try {
+            const res = await window.api.getSubtitleContent(sub.url);
+            if (res.success) {
+                const blob = new Blob([res.data], { type: 'text/vtt' });
+                const url = URL.createObjectURL(blob);
+                setSubtitleTrackUrl(url);
+            } else {
+                console.error("Failed to fetch subtitle content", res.error);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    };
 
     const checkStatus = async (channelId) => {
         if (!window.api.checkSubscription) return;
@@ -161,27 +196,20 @@ function GlobalPlayer() {
     const handleRating = async (newRating) => {
         if (!currentVideoId || isRating) return;
         setIsRating(true);
-        lastActionTime.current = Date.now(); // Pause polling
+        lastActionTime.current = Date.now();
 
         const previousRating = userRating;
         const finalRating = previousRating === newRating ? 'none' : newRating;
-
-        // Precise Delta Calculation
         let delta = 0;
+        if (previousRating === 'like') delta -= 1;
+        if (finalRating === 'like') delta += 1;
 
-        if (previousRating === 'like') delta -= 1;     // Remove existing like
-        // Note: YouTube public stats usually don't show dislikes, so removing dislike doesn't change like count
-
-        if (finalRating === 'like') delta += 1;        // Add new like
-
-        // Apply Optimistic Updates
         setUserRating(finalRating);
         setLikeCount(prev => Math.max(0, prev + delta));
 
         try {
             const res = await window.api.rateVideo(currentVideoId, finalRating);
             if (!res.success) {
-                // Revert
                 setUserRating(previousRating);
                 setLikeCount(prev => Math.max(0, prev - delta));
             }
@@ -189,16 +217,13 @@ function GlobalPlayer() {
             setUserRating(previousRating);
             setLikeCount(prev => Math.max(0, prev - delta));
         }
-
         setIsRating(false);
     };
 
     const handleSubscribe = async (channelId) => {
         if (!channelId || !window.api.modifySubscription || isModifyingSub) return;
-
         setIsModifyingSub(true);
         const action = isSubscribed ? 'unsubscribe' : 'subscribe';
-
         try {
             const res = await window.api.modifySubscription(channelId, action);
             if (res.success) {
@@ -215,47 +240,26 @@ function GlobalPlayer() {
 
     const parseDescription = (text) => {
         if (!text) return null;
-
         const parts = [];
         let key = 0;
-
         const urlRegex = /(https?:\/\/[^\s]+)/;
         const timestampRegex = /(\d{1,2}:\d{2}(?::\d{2})?)/;
-
         const combinedRegex = new RegExp(`(${urlRegex.source})|(${timestampRegex.source})`, 'g');
-
         const paragraphs = text.split('\n');
-
         paragraphs.forEach((paragraph, pIndex) => {
             let lastIndex = 0;
-
             const matches = [...paragraph.matchAll(combinedRegex)];
-
             matches.forEach(match => {
                 const matchStart = match.index;
                 const matchEnd = match.index + match[0].length;
-
                 if (matchStart > lastIndex) {
                     parts.push(<span key={key++}>{paragraph.substring(lastIndex, matchStart)}</span>);
                 }
-
                 const segment = match[0];
                 const isLink = !!match[1];
                 const isTimestamp = !!match[3];
-
                 if (isLink) {
-                    parts.push(
-                        <a
-                            key={key++}
-                            href={segment}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[#a22c29] hover:underline transition-colors"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            {segment}
-                        </a>
-                    );
+                    parts.push(<a key={key++} href={segment} target="_blank" rel="noopener noreferrer" className="text-[#a22c29] hover:underline transition-colors" onClick={(e) => e.stopPropagation()}>{segment}</a>);
                 } else if (isTimestamp) {
                     const timeArray = segment.split(':').map(Number);
                     let seconds = 0;
@@ -264,37 +268,20 @@ function GlobalPlayer() {
                     } else if (timeArray.length === 2) {
                         seconds = timeArray[0] * 60 + timeArray[1];
                     }
-
-                    parts.push(
-                        <button
-                            key={key++}
-                            onClick={() => {
-                                if (mediaRef.current) mediaRef.current.currentTime = seconds;
-                                if (audioRef.current) audioRef.current.currentTime = seconds;
-                            }}
-                            className="text-[#a22c29] hover:underline transition-colors font-bold"
-                        >
-                            {segment}
-                        </button>
-                    );
+                    parts.push(<button key={key++} onClick={() => { if (mediaRef.current) mediaRef.current.currentTime = seconds; if (audioRef.current) audioRef.current.currentTime = seconds; }} className="text-[#a22c29] hover:underline transition-colors font-bold">{segment}</button>);
                 }
-
                 lastIndex = matchEnd;
             });
-
             if (lastIndex < paragraph.length) {
                 parts.push(<span key={key++}>{paragraph.substring(lastIndex)}</span>);
             }
-
             if (pIndex < paragraphs.length - 1) {
                 parts.push(<br key={key++} />);
                 parts.push(<br key={key++} />);
             }
         });
-
         return parts;
     };
-
 
     useEffect(() => {
         if (isLive) return;
@@ -342,18 +329,57 @@ function GlobalPlayer() {
             setCurrentAudioLabel('AUTO');
             setIsDescriptionExpanded(false);
             setUserRating('none');
-            // Reset handled by poller to avoid flash
+            setLikeCount(0);
+            setSubtitles([]);
+            setCurrentSubtitle(null);
+            setSubtitleTrackUrl(null);
+            setAudioTracks([]);
+            setCurrentLanguage('Default');
 
             if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-
             if (sponsorBlockEnabled) window.api.getSponsorSegments(currentVideoId).then(res => res.success && setSponsorSegments(res.data));
-
             checkRating(currentVideoId);
 
             window.api.getFormats(currentVideoId).then(result => {
                 if (result.success) {
                     const data = result.data;
                     setVideoInfo(data);
+
+                    const rawFormats = data.formats || [];
+                    const uniqueLanguages = new Map();
+                    rawFormats.forEach(f => {
+                        if (f.vcodec === 'none' && f.acodec !== 'none') {
+                            const langCode = f.language || 'unknown';
+                            if (!uniqueLanguages.has(langCode) || (f.abr > uniqueLanguages.get(langCode).abr)) {
+                                uniqueLanguages.set(langCode, f);
+                            }
+                        }
+                    });
+                    const tracks = Array.from(uniqueLanguages.values()).map(f => {
+                        let label = 'Unknown';
+                        if (f.language) {
+                            try { label = langName.of(f.language).toUpperCase(); } catch (e) { label = f.language.toUpperCase(); }
+                        } else {
+                            label = 'ORIGINAL';
+                        }
+                        return { label, url: f.url, lang: f.language, ...f };
+                    }).sort((a, b) => a.label.localeCompare(b.label));
+                    setAudioTracks(tracks);
+
+                    const subs = [];
+                    if (data.subtitles) {
+                        Object.entries(data.subtitles).forEach(([lang, formats]) => {
+                            const vtt = formats.find(f => f.ext === 'vtt');
+                            if (vtt) subs.push({ lang, url: vtt.url, label: `${lang.toUpperCase()} (Manual)` });
+                        });
+                    }
+                    if (data.automatic_captions) {
+                        Object.entries(data.automatic_captions).forEach(([lang, formats]) => {
+                            const vtt = formats.find(f => f.ext === 'vtt');
+                            if (vtt) subs.push({ lang, url: vtt.url, label: `${lang.toUpperCase()} (Auto)` });
+                        });
+                    }
+                    setSubtitles(subs);
 
                     const isLiveStream = data.is_live === true || data.live_status === 'is_live';
 
@@ -375,7 +401,6 @@ function GlobalPlayer() {
                         setPlayableUrl(masterUrl);
                         setCurrentVideoLabel('AUTO');
                     } else {
-                        const rawFormats = data.formats || [];
                         const vOpts = rawFormats.filter(f => f.vcodec !== 'none').sort((a, b) => (b.height || 0) - (a.height || 0));
                         const uniqueV = []; const seenV = new Set();
                         vOpts.forEach(f => {
@@ -406,7 +431,6 @@ function GlobalPlayer() {
                             } else { setPlayableUrl(data.url); }
                         }
                     }
-
                     if (data.channel_id) {
                         window.api.getChannelIcon(data.channel_id).then(iconRes => {
                             if (iconRes.success) {
@@ -419,7 +443,6 @@ function GlobalPlayer() {
                         });
                         checkStatus(data.channel_id);
                     }
-
                     const catName = data.categories ? data.categories[0] : 'Unknown';
                     const catId = categoryMap[catName] || null;
                     if (!historyAdded.current) { window.api.addHistory(currentVideoId, data.title, data.uploader, data.channel_id, catId, catName); historyAdded.current = true; }
@@ -434,7 +457,6 @@ function GlobalPlayer() {
                 }
             });
         }
-
         return cleanupHls;
     }, [currentVideoId, setVideoInfo, sponsorBlockEnabled, isAudioMode]);
 
@@ -451,33 +473,27 @@ function GlobalPlayer() {
             hlsRef.current.attachMedia(el);
 
             hlsRef.current.on(Hls.Events.MANIFEST_PARSED, () => {
-                const levels = hlsRef.current.levels
-                    .map((level, index) => ({
-                        label: level.height ? `${level.height}p` : 'Unknown',
-                        url: playableUrl,
-                        index: index,
-                        height: level.height || 0
-                    }))
-                    .sort((a, b) => b.height - a.height);
+                const levels = hlsRef.current.levels.map((level, index) => ({
+                    label: level.height ? `${level.height}p` : 'Unknown',
+                    url: playableUrl,
+                    index: index,
+                    height: level.height || 0
+                })).sort((a, b) => b.height - a.height);
                 setVideoQualities(levels);
-
                 const audioTracks = hlsRef.current.audioTracks.map((track, index) => ({
                     label: track.name,
                     url: playableUrl,
                     index: index,
                 }));
                 setAudioQualities(audioTracks);
-
                 el.play().catch(console.warn);
             });
-
             hlsCleanup = () => {
                 if (hlsRef.current) {
                     hlsRef.current.destroy();
                     hlsRef.current = null;
                 }
             };
-
         } else if (playableUrl && !isLive) {
             el.src = playableUrl;
             el.playbackRate = playbackRate;
@@ -537,10 +553,7 @@ function GlobalPlayer() {
 
     if (!hasVideo) return null;
 
-    const containerClass = isWatchPage
-        ? "absolute inset-0 z-50 bg-[#0a100d] flex overflow-hidden"
-        : "fixed bottom-6 right-6 w-[480px] bg-[#18181b] rounded-2xl shadow-2xl shadow-black z-[100] border border-[#b9baa3]/20 flex flex-col overflow-hidden transition-all duration-500 hover:shadow-[#a22c29]/10 hover:border-[#a22c29]/40 group/mini";
-
+    const containerClass = isWatchPage ? "absolute inset-0 z-50 bg-[#0a100d] flex overflow-hidden" : "fixed bottom-6 right-6 w-[480px] bg-[#18181b] rounded-2xl shadow-2xl shadow-black z-[100] border border-[#b9baa3]/20 flex flex-col overflow-hidden transition-all duration-500 hover:shadow-[#a22c29]/10 hover:border-[#a22c29]/40 group/mini";
     const wrapperClass = isWatchPage ? "flex-1 flex flex-col p-0 md:p-4 overflow-y-auto custom-scrollbar" : "w-full flex-col";
     const videoContainerClass = isWatchPage ? "w-full max-w-[1600px] mx-auto" : "w-full";
     const videoAspectRatioClass = isWatchPage ? "relative bg-black rounded-xl overflow-hidden aspect-video border border-[#b9baa3]/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] ring-1 ring-white/5" : "relative w-full aspect-video bg-black group";
@@ -560,7 +573,9 @@ function GlobalPlayer() {
                             {!isWatchPage && <div className="absolute inset-0 flex items-center justify-center z-20"><div className="w-16 h-16 rounded-full border border-[#a22c29] flex items-center justify-center animate-pulse"><span className="text-2xl text-[#a22c29]">♪</span></div></div>}
                         </div>
 
-                        <video key={currentVideoId} ref={mediaRef} className={`w-full h-full object-contain relative z-10 ${isAudioMode ? 'opacity-0' : 'opacity-100'}`} autoPlay onClick={isWatchPage ? togglePlay : undefined} onEnded={handleVideoEnd} />
+                        <video key={currentVideoId} ref={mediaRef} className={`w-full h-full object-contain relative z-10 ${isAudioMode ? 'opacity-0' : 'opacity-100'}`} autoPlay onClick={isWatchPage ? togglePlay : undefined} onEnded={handleVideoEnd} muted={!!audioUrl && !isAudioMode}>
+                            {subtitleTrackUrl && <track kind="subtitles" src={subtitleTrackUrl} default />}
+                        </video>
                         {!isLive && audioUrl && <audio ref={audioRef} src={audioUrl} autoPlay />}
 
                         {isWatchPage && (
@@ -588,6 +603,48 @@ function GlobalPlayer() {
                                     </div>
 
                                     <div className="flex items-center gap-4">
+                                        {/* AUDIO LANGUAGE BUTTON */}
+                                        {audioTracks.length > 0 && (
+                                            <div className="relative">
+                                                <button onClick={() => setShowLangMenu(!showLangMenu)} className={`p-2 rounded border transition-all ${currentLanguage !== 'Default' ? 'bg-[#a22c29] border-[#a22c29] text-white' : 'bg-transparent border-[#b9baa3]/30 text-[#b9baa3] hover:border-[#d6d5c9]'}`}>
+                                                    <IconLanguage size={20} stroke={1.5} />
+                                                </button>
+                                                {showLangMenu && (
+                                                    <>
+                                                        <div className="fixed inset-0 z-40" onClick={() => setShowLangMenu(false)}></div>
+                                                        <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[140px] shadow-2xl flex flex-col max-h-64 overflow-y-auto custom-scrollbar">
+                                                            {audioTracks.map((track, idx) => (
+                                                                <button key={idx} onClick={() => handleAudioLanguageChange(track)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentLanguage === track.label ? 'text-[#a22c29] font-bold' : 'text-[#b9baa3]'}`}>
+                                                                    {track.label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* CC BUTTON */}
+                                        <div className="relative">
+                                            <button onClick={() => setShowSubtitleMenu(!showSubtitleMenu)} className={`p-2 rounded border transition-all ${currentSubtitle ? 'bg-[#a22c29] border-[#a22c29] text-white' : 'bg-transparent border-[#b9baa3]/30 text-[#b9baa3] hover:border-[#d6d5c9]'}`}>
+                                                {currentSubtitle ? <IconBadgeCcFilled size={20} /> : <IconBadgeCc size={20} stroke={1.5} />}
+                                            </button>
+                                            {showSubtitleMenu && (
+                                                <>
+                                                    <div className="fixed inset-0 z-40" onClick={() => setShowSubtitleMenu(false)}></div>
+                                                    <div className="absolute bottom-full right-0 mb-4 bg-[#0a100d]/95 border border-[#b9baa3]/20 backdrop-blur-xl rounded p-1 z-50 min-w-[140px] shadow-2xl flex flex-col max-h-64 overflow-y-auto custom-scrollbar">
+                                                        <button onClick={() => handleSubtitleChange(null)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${!currentSubtitle ? 'text-[#a22c29] font-bold' : 'text-[#b9baa3]'}`}>Off</button>
+                                                        {subtitles.map((sub, idx) => (
+                                                            <button key={idx} onClick={() => handleSubtitleChange(sub)} className={`block w-full text-left px-4 py-2 text-[10px] font-mono tracking-wider uppercase hover:bg-[#a22c29] hover:text-white transition-colors ${currentSubtitle?.url === sub.url ? 'text-[#a22c29] font-bold' : 'text-[#b9baa3]'}`}>
+                                                                {sub.label}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+
+                                        {/* VIDEO QUALITY BUTTON */}
                                         <div className="relative">
                                             <button onClick={() => setShowQualityMenu(!showQualityMenu)} className="text-[10px] font-bold bg-[#b9baa3]/10 border border-[#b9baa3]/20 text-[#d6d5c9] px-3 py-1 rounded hover:bg-[#b9baa3]/20 hover:border-[#d6d5c9]/50 transition-all min-w-[60px] uppercase tracking-wider">{currentVideoLabel}</button>
                                             {showQualityMenu && (
@@ -599,6 +656,8 @@ function GlobalPlayer() {
                                                 </>
                                             )}
                                         </div>
+
+                                        {/* AUDIO QUALITY BUTTON */}
                                         <div className="relative">
                                             <button onClick={() => setShowAudioMenu(!showAudioMenu)} className="text-[10px] font-bold bg-[#b9baa3]/10 border border-[#b9baa3]/20 text-[#d6d5c9] px-3 py-1 rounded hover:bg-[#b9baa3]/20 hover:border-[#d6d5c9]/50 transition-all min-w-[60px] uppercase tracking-wider max-w-[100px] truncate">{currentAudioLabel}</button>
                                             {showAudioMenu && (
@@ -610,6 +669,7 @@ function GlobalPlayer() {
                                                 </>
                                             )}
                                         </div>
+
                                         <button onClick={handleMiniPlayer} className="text-[#b9baa3] hover:text-white transition-colors"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/></svg></button>
                                         <button onClick={toggleFullscreen} className="text-[#b9baa3] hover:text-white transition-colors"><svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
                                     </div>
