@@ -16,6 +16,37 @@
 
 Unlike the web player, ViTube leverages `yt-dlp` under the hood to stream **4K HDR content**, merge separate audio/video streams in real-time, and provide granular control over playback and downloads.
 
+##  Project Structure
+
+```sh
+└── ViTube/
+    ├── LICENSE
+    ├── README.md
+    ├── assets
+    │   └── icon.ico
+    ├── electron
+    │   ├── authManager.template.js
+    │   ├── database.js
+    │   ├── downloadManager.js
+    │   ├── main.js
+    │   ├── preload.js
+    │   ├── youtubeClient.js
+    │   └── ytDlpService.js
+    ├── index.html
+    ├── package-lock.json
+    ├── package.json
+    ├── postcss.config.js
+    ├── src
+    │   ├── App.jsx
+    │   ├── UI
+    │   ├── categoryMap.js
+    │   ├── index.css
+    │   ├── main.jsx
+    │   └── store.js
+    ├── tailwind.config.js
+    └── vite.config.js
+```
+
 ## ✨ Key Features
 
 ### 🎥 Enhanced Viewing
@@ -64,23 +95,32 @@ cd ViTube
 npm install
 
 ### 3. Configure Environment
-Create a `.env` file in the root directory:
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-GOOGLE_API_KEY=your_api_key
-REDIRECT_URI=http://localhost:8080
+Create a `authManager.template.js` to `authManager.js` file in the `electron` directory:
+```sh
+const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID_HERE';
+const GOOGLE_CLIENT_SECRET = 'YOUR_GOOGLE_CLIENT_SECRET_HERE';
+const REDIRECT_URI = 'http://localhost:8080';
+const HARDCODED_API_KEYS = [
+    'YOUR_API_KEY_1',
+    'YOUR_API_KEY_2',
+    // ...
+];
+```
+add your creds here
+
 
 ### 4. Setup Binaries (CRITICAL)
 Create an `assets` folder in the root directory and place the following files inside:
 - `assets/yt-dlp.exe`
 - `assets/ffmpeg.exe`
 - `assets/ffprobe.exe`
-- `assets/icon.ico`
 
 > **Note:** These files are too large for GitHub and are ignored by git. You must provide them locally.
 
 ### 5. Run Development Server
+```
 npm run dev
+```
 
 ---
 
@@ -88,7 +128,9 @@ npm run dev
 
 To create a standalone `.exe` installer for Windows:
 
+```
 npm run build
+```
 
 The installer will be generated in the `dist_electron` folder.
 
