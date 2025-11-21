@@ -95,7 +95,7 @@ cd ViTube
 npm install
 
 ### 3. Configure Environment
-Create a `authManager.template.js` to `authManager.js` file in the `electron` directory:
+Rename `authManager.template.js` to `authManager.js` file in the `electron` directory:
 ```sh
 const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID_HERE';
 const GOOGLE_CLIENT_SECRET = 'YOUR_GOOGLE_CLIENT_SECRET_HERE';
