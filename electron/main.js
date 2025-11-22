@@ -15,6 +15,7 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.commandLine.appendSwitch('max-active-webgl-contexts', '100');
 
 let mainWindow;
 
@@ -61,9 +62,16 @@ function createWindow() {
             ]
         },
         (details, callback) => {
-            details.requestHeaders['Referer'] = 'https://www.youtube.com/';
-            details.requestHeaders['Origin'] = 'https://www.youtube.com';
-            callback({ cancel: false, requestHeaders: details.requestHeaders });
+            const { url, requestHeaders } = details;
+            if (url.includes('googlevideo.com')) {
+                delete requestHeaders['Referer'];
+                delete requestHeaders['Origin'];
+            } else {
+                requestHeaders['Referer'] = 'https://www.youtube.com/';
+                requestHeaders['Origin'] = 'https://www.youtube.com';
+            }
+
+            callback({ cancel: false, requestHeaders: requestHeaders });
         }
     );
 

@@ -16,7 +16,6 @@ const getBinaryPath = (binaryName) => {
 };
 
 const ytDlpPath = getBinaryPath('yt-dlp');
-const ffmpegPath = getBinaryPath('ffmpeg');
 
 function getVideoFormats(videoId) {
     return new Promise((resolve, reject) => {
@@ -27,8 +26,8 @@ function getVideoFormats(videoId) {
         const ytDlp = spawn(ytDlpPath, [
             '--dump-json',
             '--no-playlist',
-            '--youtube-skip-dash-manifest',
             '--no-check-certificates',
+            '--extractor-args', 'youtube:player_client=android_vr',
             videoUrl
         ], { cwd });
 
@@ -50,7 +49,7 @@ function getVideoFormats(videoId) {
                     const jsonData = JSON.parse(output);
                     resolve(jsonData);
                 } catch (e) {
-                    reject(new Error('Failed to parse yt-dlp JSON output.'));
+                    reject(new Error(`Failed to parse yt-dlp output. Code: ${code}. Error: ${errorOutput}`));
                 }
             } else {
                 reject(new Error(`yt-dlp exited with code ${code}: ${errorOutput}`));
