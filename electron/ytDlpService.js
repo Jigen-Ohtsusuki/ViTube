@@ -1,31 +1,34 @@
 const { app } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const os = require('os');
 
-const getBinaryPath = () => {
+const getBinaryPath = (binaryName) => {
+    const platform = os.platform();
+    const isWin = platform === 'win32';
+
+    const finalName = isWin ? `${binaryName}.exe` : binaryName;
+
     if (app.isPackaged) {
-        // In production, assets are in 'resources/assets' next to the exe
-        return path.join(process.resourcesPath, 'assets', 'yt-dlp.exe');
+        return path.join(process.resourcesPath, 'assets', finalName);
     }
-    // In dev, assets are in the project root
-    return path.join(app.getAppPath(), 'assets', 'yt-dlp.exe');
+    return path.join(app.getAppPath(), 'assets', finalName);
 };
 
-const ytDlpPath = getBinaryPath();
+const ytDlpPath = getBinaryPath('yt-dlp');
+const ffmpegPath = getBinaryPath('ffmpeg');
 
 function getVideoFormats(videoId) {
     return new Promise((resolve, reject) => {
         const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-        // IMPORTANT: We must set the cwd (Current Working Directory) so yt-dlp finds ffmpeg
         const cwd = path.dirname(ytDlpPath);
 
         const ytDlp = spawn(ytDlpPath, [
             '--dump-json',
             '--no-playlist',
-            // Force extraction of ALL individual streams, not just the master playlist
-            '--youtube-skip-dash-manifest',  // Skip DASH (we want HLS for live)
-            '--no-check-certificates',       // Sometimes needed for live streams
+            '--youtube-skip-dash-manifest',
+            '--no-check-certificates',
             videoUrl
         ], { cwd });
 
@@ -38,7 +41,6 @@ function getVideoFormats(videoId) {
 
         ytDlp.stderr.on('data', (data) => {
             errorOutput += data.toString();
-            // Log warnings but don't fail
             console.log('[yt-dlp stderr]:', data.toString());
         });
 

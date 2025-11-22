@@ -1,6 +1,7 @@
 {
   "name": "vitube",
   "version": "1.0.0",
+  "author": "Jigen <abhishekpenkey@gmail.com>",
   "main": "electron/main.js",
   "description": "Personal YouTube Client",
   "scripts": {
@@ -30,6 +31,25 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "pacman"
+      ],
+      "icon": "assets",
+      "category": "Video"
+    },
+    "pacman": {
+      "depends": [
+        "gtk3",
+        "nss",
+        "libxss",
+        "libnotify",
+        "libappindicator-gtk3",
+        "alsa-lib",
+        "xdg-utils"
+      ]
     }
   },
   "dependencies": {

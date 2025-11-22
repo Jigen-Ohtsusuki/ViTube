@@ -1,22 +1,28 @@
 const { app } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const os = require('os');
 
-const getBinaryPath = () => {
+const getBinaryPath = (binaryName) => {
+    const platform = os.platform();
+    const isWin = platform === 'win32';
+    const finalName = isWin ? `${binaryName}.exe` : binaryName;
+
     if (app.isPackaged) {
-        return path.join(process.resourcesPath, 'assets', 'yt-dlp.exe');
+        return path.join(process.resourcesPath, 'assets', finalName);
     }
-    return path.join(app.getAppPath(), 'assets', 'yt-dlp.exe');
+    return path.join(app.getAppPath(), 'assets', finalName);
 };
 
-const ytDlpPath = getBinaryPath();
+const ytDlpPath = getBinaryPath('yt-dlp');
+
 const downloadPath = app.getPath('downloads');
 
 function startDownload(videoId, videoFormatId, audioFormatId) {
     return new Promise((resolve, reject) => {
         const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
         const formatString = `${videoFormatId}+${audioFormatId}`;
-        const cwd = path.dirname(ytDlpPath); // <-- Add CWD so it finds ffmpeg
+        const cwd = path.dirname(ytDlpPath);
 
         const ytDlp = spawn(ytDlpPath, [
             '-o',
@@ -25,8 +31,9 @@ function startDownload(videoId, videoFormatId, audioFormatId) {
             formatString,
             '--merge-output-format',
             'mp4',
+            '--ffmpeg-location', cwd,
             videoUrl
-        ], { cwd }); // <-- Pass CWD here
+        ], { cwd });
 
         ytDlp.stdout.on('data', (data) => {
             console.log(`[yt-dlp] ${data}`);

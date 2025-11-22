@@ -12,3 +12,6 @@ electron/authManager.js
 
 # Ignore heavy binaries
 assets/*.exe
+assets/yt-dlp
+assets/ffprobe
+assets/ffmpeg
